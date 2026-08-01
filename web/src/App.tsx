@@ -1,121 +1,122 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { OledPreview } from './components/OledPreview';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { extractSignature } from './cards/signature';
+import { deleteAccount, loadAccounts, type Account as AccountRecord } from './cards/store';
+import { useSwipe, type CapturedSwipe } from './cards/useSwipe';
+import { Cone } from './components/ui';
+import { Account } from './pages/Account';
+import { CreateAccount } from './pages/CreateAccount';
+import { Landing } from './pages/Landing';
+import { Login } from './pages/Login';
 import { command, type HardwareEvent } from './serial/protocol';
 import { useHardware } from './serial/useHardware';
 import './index.css';
 
-const PRESETS = [
-  'Simon says: Red',
-  'Find: Blue',
-  'Correct!',
-  "Time's up!",
-  'Hello from the browser',
-];
-
-const LIGHTS = [
-  {
-    key: 'led',
-    label: 'Board LED',
-    detail: 'pin 13 — the onboard "L"',
-    toggle: command.led,
-  },
-  {
-    key: 'sensor',
-    label: 'Sensor illuminator',
-    detail: 'white LED on the TCS34725',
-    toggle: command.sensorLed,
-  },
-  {
-    key: 'display',
-    label: 'OLED panel',
-    detail: 'display power, text is retained',
-    toggle: command.display,
-  },
-] as const;
+type Route =
+  | { name: 'landing' }
+  | { name: 'create' }
+  | { name: 'login' }
+  | { name: 'account'; id: string };
 
 const STATE_LABEL: Record<string, string> = {
   unsupported: 'Web Serial unsupported',
-  disconnected: 'Disconnected',
-  connecting: 'Booting board…',
-  connected: 'Connected',
+  disconnected: 'Board offline',
+  connecting: 'Starting board…',
+  connected: 'Board ready',
 };
 
-export default function App() {
-  const [draft, setDraft] = useState('Hello from the browser');
-  // What we last told the board to display, as opposed to what is being typed.
-  const [onScreen, setOnScreen] = useState('Waiting for browser...');
-  const [servoAngles, setServoAngles] = useState<[number, number, number]>([90, 90, 90]);
-  const [choice, setChoice] = useState(0);
+/** Floor on OLED redraws — a full frame is ~25 ms of blocking I2C. */
+const MIN_OLED_MS = 350;
 
-  const handleEvent = useCallback((event: HardwareEvent) => {
-    if (event.type === 'joystick') {
-      if (event.direction === 'UP' || event.direction === 'LEFT') {
-        setChoice((current) => (current - 1 + PRESETS.length) % PRESETS.length);
-      } else {
-        setChoice((current) => (current + 1) % PRESETS.length);
-      }
-    }
+/** The firmware's oledText buffer. */
+const OLED_LIMIT = 39;
+
+export default function App() {
+  const [route, setRoute] = useState<Route>({ name: 'landing' });
+  const [accounts, setAccounts] = useState<AccountRecord[]>(() => loadAccounts());
+  const [lastSwipe, setLastSwipe] = useState<CapturedSwipe | null>(null);
+
+  // What the current page wants the hardware doing. Pages declare it; this
+  // component is the only thing that talks to the board.
+  const [reader, setReader] = useState({ open: false, oled: 'SIMON|CONE' });
+
+  const seq = useRef(0);
+  const lastOledAt = useRef(0);
+
+  const onSwipe = useCallback((samples: Parameters<typeof extractSignature>[0]) => {
+    seq.current++;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    setLastSwipe({
+      seq: seq.current,
+      signature: extractSignature(samples),
+      samples: samples.length,
+      durationMs: first && last ? last.t - first.t : 0,
+    });
   }, []);
 
-  const hardware = useHardware(handleEvent);
-  const { state, send, emulate, lights } = hardware;
-  const connected = state === 'connected' || state === 'connecting';
+  const swipe = useSwipe(onSwipe);
+  const { feed } = swipe;
 
-  const pushText = useCallback(
-    (text: string) => {
-      setOnScreen(text);
-      send(command.oled(text));
+  const handleEvent = useCallback(
+    (event: HardwareEvent) => {
+      if (event.type === 'sample') feed(event.sample);
     },
-    [send],
+    [feed],
   );
 
-  // Keyboard stands in for the joystick so the UI is fully testable with
-  // nothing plugged in — and doubles as a fallback if the cable misbehaves.
+  const hardware = useHardware(handleEvent);
+  const { state, send } = hardware;
+  const connected = state === 'connected';
+
+  const onReader = useCallback((open: boolean, oled: string) => {
+    setReader((current) =>
+      current.open === open && current.oled === oled ? current : { open, oled },
+    );
+  }, []);
+
+  // Opening the gate and starting the stream are one action as far as the app
+  // is concerned: there is no reason to read while the shutter is shut, and no
+  // reason to shut it while a page is waiting for a card.
   useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return;
-      const map: Record<string, HardwareEvent> = {
-        ArrowUp: { type: 'joystick', direction: 'UP' },
-        ArrowDown: { type: 'joystick', direction: 'DOWN' },
-        ArrowLeft: { type: 'joystick', direction: 'LEFT' },
-        ArrowRight: { type: 'joystick', direction: 'RIGHT' },
-        Enter: { type: 'button', pressed: true },
-      };
-      const synthetic = map[event.key];
-      if (!synthetic) return;
-      event.preventDefault();
-      emulate(synthetic);
-      if (synthetic.type === 'button') {
-        window.setTimeout(() => emulate({ type: 'button', pressed: false }), 120);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [emulate]);
+    if (!connected) return;
+    send(command.gate(reader.open));
+    send(command.swipe(reader.open));
+    if (reader.open) swipe.reset();
+  }, [connected, reader.open, send, swipe]);
 
-  const setServo = (index: 0 | 1 | 2, angle: number) => {
-    setServoAngles((current) => {
-      const next = [...current] as [number, number, number];
-      next[index] = angle;
-      return next;
-    });
-    send(command.servo((index + 1) as 1 | 2 | 3, angle));
-  };
+  useEffect(() => {
+    if (!connected) return;
+    const text = reader.oled.replace(/[\r\n]/g, ' ').slice(0, OLED_LIMIT);
+    const wait = Math.max(0, MIN_OLED_MS - (Date.now() - lastOledAt.current));
+    const timer = window.setTimeout(() => {
+      lastOledAt.current = Date.now();
+      send(command.oled(text));
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [connected, reader.oled, send]);
 
-  const logs = useMemo(() => hardware.logs.slice(-120).reverse(), [hardware.logs]);
+  const go = useCallback((next: Route) => {
+    setLastSwipe(null);
+    setRoute(next);
+  }, []);
+
+  const account =
+    route.name === 'account'
+      ? (accounts.find((entry) => entry.id === route.id) ?? null)
+      : null;
 
   return (
-    <div className="app">
+    <div className="shell">
       <header className="topbar">
-        <div>
-          <h1>simon_cone</h1>
-          <p className="topbar__sub">hardware bridge · dev console</p>
-        </div>
+        <button className="brand" onClick={() => go({ name: 'landing' })}>
+          <Cone className="cone-mark" />
+          Simon Cone
+        </button>
         <div className="topbar__right">
-          <span className={`status status--${state}`}>
+          <span className={`pill pill--${state}`}>
             <i /> {STATE_LABEL[state]}
           </span>
-          {connected ? (
+          {state === 'connected' || state === 'connecting' ? (
             <button className="btn" onClick={() => void hardware.disconnect()}>
               Disconnect
             </button>
@@ -131,158 +132,104 @@ export default function App() {
         </div>
       </header>
 
-      {state === 'unsupported' && (
-        <p className="banner">
-          This browser has no Web Serial API. Use Chrome, Edge or Opera on desktop.
-        </p>
-      )}
-      {hardware.error && <p className="banner banner--error">{hardware.error}</p>}
+      <main className="main">
+        {state === 'unsupported' && (
+          <p className="notice notice--error" style={{ marginBottom: 20 }}>
+            This browser has no Web Serial API. Use Chrome, Edge or Opera on desktop.
+          </p>
+        )}
+        {hardware.error && (
+          <p className="notice notice--error" style={{ marginBottom: 20 }}>
+            {hardware.error}
+          </p>
+        )}
 
-      <main className="grid">
-        <section className="card">
-          <h2>Display</h2>
-          <OledPreview text={onScreen} />
+        {route.name === 'landing' && (
+          <Landing
+            accounts={accounts.length}
+            onCreate={() => go({ name: 'create' })}
+            onSwipe={() => go({ name: 'login' })}
+          />
+        )}
 
-          <div className="row">
-            <input
-              className="input"
-              value={draft}
-              placeholder="Text to show on the OLED"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => event.key === 'Enter' && pushText(draft)}
-            />
-            <button className="btn btn--primary" onClick={() => pushText(draft)}>
-              Send
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                setOnScreen('');
-                send(command.clear());
+        {route.name === 'create' && (
+          <CreateAccount
+            lastSwipe={lastSwipe}
+            meter={swipe.meter}
+            ready={connected && reader.open}
+            onReader={onReader}
+            onCancel={() => go({ name: 'landing' })}
+            onDone={(created) => {
+              setAccounts(loadAccounts());
+              go({ name: 'account', id: created.id });
+            }}
+          />
+        )}
+
+        {route.name === 'login' && (
+          <Login
+            accounts={accounts}
+            lastSwipe={lastSwipe}
+            meter={swipe.meter}
+            ready={connected && reader.open}
+            onReader={onReader}
+            onCancel={() => go({ name: 'landing' })}
+            onMatch={(matched) => go({ name: 'account', id: matched.id })}
+          />
+        )}
+
+        {route.name === 'account' &&
+          (account ? (
+            <Account
+              account={account}
+              onReader={onReader}
+              onSignOut={() => go({ name: 'landing' })}
+              onDelete={(id) => {
+                setAccounts(deleteAccount(id));
+                go({ name: 'landing' });
               }}
-            >
-              Clear
-            </button>
-          </div>
-
-          <h3>Presets — arrow keys or the joystick move the selection</h3>
-          <ul className="choices">
-            {PRESETS.map((preset, index) => (
-              <li key={preset}>
-                <button
-                  className={`choice ${index === choice ? 'choice--active' : ''}`}
-                  onClick={() => {
-                    setChoice(index);
-                    setDraft(preset);
-                    pushText(preset);
-                  }}
-                >
-                  {preset}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="card">
-          <h2>Inputs</h2>
-          <dl className="readouts">
-            <div>
-              <dt>Colour sensor</dt>
-              <dd className="readout__value">{hardware.color ?? '—'}</dd>
-            </div>
-            <div>
-              <dt>Last joystick</dt>
-              <dd className="readout__value">{hardware.joystick ?? '—'}</dd>
-            </div>
-            <div>
-              <dt>Button</dt>
-              <dd className="readout__value">{hardware.buttonDown ? 'DOWN' : 'up'}</dd>
-            </div>
-          </dl>
-
-          <h2>Lights</h2>
-          {lights === null ? (
-            <p className="hint">Connect the board to see its light state.</p>
+            />
           ) : (
-            <ul className="lights">
-              {LIGHTS.map(({ key, label, detail, toggle }) => (
-                <li key={key}>
-                  <button
-                    className={`light ${lights[key] ? 'light--on' : ''}`}
-                    onClick={() => send(toggle(!lights[key]))}
-                  >
-                    <span className="light__dot" />
-                    <span className="light__text">
-                      <b>{label}</b>
-                      <small>{detail}</small>
-                    </span>
-                    <span className="light__state">{lights[key] ? 'ON' : 'OFF'}</span>
-                  </button>
+            <p className="notice">That account no longer exists.</p>
+          ))}
+
+        <details className="debug">
+          <summary>Board log</summary>
+          <ol className="log">
+            {hardware.logs.length === 0 && <li>Nothing yet.</li>}
+            {hardware.logs
+              .slice(-60)
+              .reverse()
+              .map((entry) => (
+                <li key={entry.id} className={`log__line--${entry.direction}`}>
+                  <span className="log__dir">
+                    {entry.direction === 'in' ? '<-' : entry.direction === 'out' ? '->' : '**'}
+                  </span>
+                  <span>{entry.text}</span>
                 </li>
               ))}
-            </ul>
-          )}
-          <div className="row">
-            <button className="btn" onClick={() => send(command.allLights(false))}>
-              All off
-            </button>
-            <button className="btn" onClick={() => send(command.allLights(true))}>
-              All on
-            </button>
-          </div>
-
-          <h2>Diagnostics</h2>
-          <div className="row">
-            <button className="btn" onClick={() => send(command.ping())}>
-              Ping
-            </button>
-            <button className="btn" onClick={() => send(command.rawStream(true))}>
-              Stream raw
-            </button>
-            <button className="btn" onClick={() => send(command.rawStream(false))}>
-              Stop raw
-            </button>
-          </div>
-
-          {servoAngles.map((angle, index) => (
-            <label className="slider" key={index}>
-              <span>
-                Servo {index + 1}
-                <b>{angle}°</b>
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={180}
-                value={angle}
-                onChange={(event) =>
-                  setServo(index as 0 | 1 | 2, Number(event.target.value))
-                }
-              />
-            </label>
-          ))}
-        </section>
-
-        <section className="card card--wide">
-          <div className="card__head">
-            <h2>Serial log</h2>
-            <button className="btn btn--small" onClick={hardware.clearLogs}>
-              Clear
-            </button>
-          </div>
-          <ol className="log">
-            {logs.length === 0 && <li className="log__empty">Nothing yet.</li>}
-            {logs.map((entry) => (
-              <li key={entry.id} className={`log__line log__line--${entry.direction}`}>
-                <span className="log__dir">
-                  {entry.direction === 'in' ? '<-' : entry.direction === 'out' ? '->' : '**'}
-                </span>
-                <span>{entry.text}</span>
-              </li>
-            ))}
           </ol>
-        </section>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn" onClick={() => send(command.gate(!reader.open))}>
+              Toggle gate
+            </button>
+            <button className="btn" onClick={() => send(command.gain(1))}>
+              Gain 4x
+            </button>
+            <button className="btn" onClick={() => send(command.gain(2))}>
+              Gain 16x
+            </button>
+            <button className="btn" onClick={hardware.clearLogs}>
+              Clear log
+            </button>
+          </div>
+          {lastSwipe && (
+            <p className="subtle" style={{ marginTop: 10 }}>
+              Last swipe: {lastSwipe.samples} samples over {lastSwipe.durationMs} ms
+              {lastSwipe.signature ? '' : ' — too short to use'}
+            </p>
+          )}
+        </details>
       </main>
     </div>
   );

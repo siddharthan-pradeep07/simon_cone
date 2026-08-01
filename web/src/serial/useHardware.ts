@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BAUD_RATE,
+  DEFAULT_CONFIG,
   parseLine,
+  type Config,
   type HardwareEvent,
-  type JoystickDirection,
-  type Lights,
 } from './protocol';
 
 export type ConnectionState =
@@ -17,41 +17,18 @@ export interface LogEntry {
   id: number;
   direction: 'in' | 'out' | 'sys';
   text: string;
-  at: number;
 }
 
-const LOG_LIMIT = 300;
+const LOG_LIMIT = 200;
 
 /** How long to wait for READY before assuming the board is up anyway. */
 const READY_TIMEOUT_MS = 5000;
 
-export interface Hardware {
-  state: ConnectionState;
-  error: string | null;
-  logs: LogEntry[];
-  color: string | null;
-  joystick: JoystickDirection | null;
-  buttonDown: boolean;
-  /** Mirrors the board's own state; null until it reports LIGHTS. */
-  lights: Lights | null;
-  connect: () => Promise<void>;
-  disconnect: () => Promise<void>;
-  send: (line: string) => void;
-  clearLogs: () => void;
-  /** Feed a synthetic event in, so the UI is buildable with nothing plugged in. */
-  emulate: (event: HardwareEvent) => void;
-}
-
-export function useHardware(
-  onEvent?: (event: HardwareEvent) => void,
-): Hardware {
+export function useHardware(onEvent?: (event: HardwareEvent) => void) {
   const [state, setState] = useState<ConnectionState>('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [color, setColor] = useState<string | null>(null);
-  const [joystick, setJoystick] = useState<JoystickDirection | null>(null);
-  const [buttonDown, setButtonDown] = useState(false);
-  const [lights, setLights] = useState<Lights | null>(null);
+  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
 
   const portRef = useRef<SerialPort | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
@@ -70,46 +47,22 @@ export function useHardware(
 
   const log = useCallback((direction: LogEntry['direction'], text: string) => {
     setLogs((previous) => {
-      const next = [
-        ...previous,
-        { id: logIdRef.current++, direction, text, at: Date.now() },
-      ];
+      const next = [...previous, { id: logIdRef.current++, direction, text }];
       return next.length > LOG_LIMIT ? next.slice(-LOG_LIMIT) : next;
     });
   }, []);
 
   const dispatch = useCallback((event: HardwareEvent) => {
-    switch (event.type) {
-      case 'ready':
-        if (readyTimerRef.current !== null) {
-          window.clearTimeout(readyTimerRef.current);
-          readyTimerRef.current = null;
-        }
-        setState('connected');
-        break;
-      case 'lights':
-        setLights(event.lights);
-        break;
-      case 'color':
-        setColor(event.name);
-        break;
-      case 'joystick':
-        setJoystick(event.direction);
-        break;
-      case 'button':
-        setButtonDown(event.pressed);
-        break;
+    if (event.type === 'ready') {
+      if (readyTimerRef.current !== null) {
+        window.clearTimeout(readyTimerRef.current);
+        readyTimerRef.current = null;
+      }
+      setState('connected');
     }
+    if (event.type === 'config') setConfig(event.config);
     onEventRef.current?.(event);
   }, []);
-
-  const emulate = useCallback(
-    (event: HardwareEvent) => {
-      log('sys', `emulated ${JSON.stringify(event)}`);
-      dispatch(event);
-    },
-    [dispatch, log],
-  );
 
   const teardown = useCallback(async () => {
     if (readyTimerRef.current !== null) {
@@ -138,7 +91,7 @@ export function useHardware(
     portRef.current = null;
 
     setState('disconnected');
-    setLights(null);  // stale toggles are worse than no toggles
+    setConfig(DEFAULT_CONFIG);
   }, []);
 
   const readLoop = useCallback(
@@ -161,8 +114,12 @@ export function useHardware(
             const line = buffer.slice(0, newline).replace(/\r$/, '');
             buffer = buffer.slice(newline + 1);
             if (!line) continue;
-            log('in', line);
-            dispatch(parseLine(line));
+            const event = parseLine(line);
+            // Samples arrive 125 times a second. Appending each to React state
+            // would spend the frame budget re-rendering a log nobody can read
+            // at that speed.
+            if (event.type !== 'sample') log('in', line);
+            dispatch(event);
           }
         }
       } catch (cause) {
@@ -191,14 +148,12 @@ export function useHardware(
       portRef.current = port;
       writerRef.current = port.writable!.getWriter();
       setState('connecting');
-      log('sys', `port opened at ${BAUD_RATE} baud, waiting for READY`);
 
       // Opening the port toggles DTR, which resets the board. It takes a
       // couple of seconds to come back and announce itself.
       readyTimerRef.current = window.setTimeout(() => {
         readyTimerRef.current = null;
         setState((current) => (current === 'connecting' ? 'connected' : current));
-        log('sys', 'no READY received, assuming the board is up');
       }, READY_TIMEOUT_MS);
 
       void readLoop(port).then(teardown);
@@ -208,49 +163,37 @@ export function useHardware(
       if (!/No port selected/i.test(message)) setError(message);
       await teardown();
     }
-  }, [log, readLoop, teardown]);
+  }, [readLoop, teardown]);
 
   const send = useCallback(
     (line: string) => {
       const writer = writerRef.current;
-      if (!writer) {
-        log('sys', `not connected, dropped: ${line}`);
-        return;
-      }
+      if (!writer) return;
       log('out', line);
       void writer.write(new TextEncoder().encode(`${line}\n`));
     },
     [log],
   );
 
-  const clearLogs = useCallback(() => setLogs([]), []);
-
   // Cable yanked out mid-session.
   useEffect(() => {
     if (!('serial' in navigator)) return;
     const handleDisconnect = () => {
-      if (portRef.current) {
-        log('sys', 'device disconnected');
-        void teardown();
-      }
+      if (portRef.current) void teardown();
     };
     navigator.serial.addEventListener('disconnect', handleDisconnect);
     return () =>
       navigator.serial.removeEventListener('disconnect', handleDisconnect);
-  }, [log, teardown]);
+  }, [teardown]);
 
   return {
     state,
     error,
     logs,
-    color,
-    joystick,
-    buttonDown,
-    lights,
+    config,
     connect,
     disconnect: teardown,
     send,
-    clearLogs,
-    emulate,
+    clearLogs: useCallback(() => setLogs([]), []),
   };
 }

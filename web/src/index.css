@@ -14,25 +14,25 @@
   --cone-600: #ea580c;
   --cone-700: #c2410c;
 
-  --bg: #fafaf9;
+  --bg: #fff;
   --surface: #ffffff;
-  --border: #e7e5e4;
+  --border: #2b2a2a;
   --border-strong: #d6d3d1;
-  --fg: #1c1917;
+  --fg: #181716;
   --fg-muted: #78716c;
   --fg-subtle: #a8a29e;
 
   --danger: #dc2626;
-  --danger-bg: #fef2f2;
+  --danger-bg: #ff4040;
   --success: #16a34a;
   --success-bg: #f0fdf4;
 
   --radius: 12px;
   --radius-lg: 16px;
-  --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.05);
-  --shadow: 0 1px 3px rgba(28, 25, 23, 0.08), 0 8px 24px -12px rgba(28, 25, 23, 0.14);
+  --shadow-sm: 0 2px 3px rgba(28, 25, 23, 0.05);
+  --shadow: 0 2px 4px rgba(28, 25, 23, 0.08), 0 8px 24px -12px rgba(28, 25, 23, 0.14);
 
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --sans: "Montserrat", sans-serif;
   --mono: 'SFMono-Regular', 'JetBrains Mono', Consolas, monospace;
 }
 
@@ -51,6 +51,9 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
   font-size: 15px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -82,7 +85,7 @@ p {
 }
 
 code {
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 0.9em;
 }
 
@@ -150,7 +153,7 @@ code {
   gap: 7px;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 3px solid #000;
   background: var(--surface);
   font-size: 12px;
   color: var(--fg-muted);
@@ -161,15 +164,18 @@ code {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  border: 3px solid #000;
   background: var(--fg-subtle);
 }
 
 .pill--connected i {
   background: var(--success);
+  border: 3px solid #505851;
 }
 .pill--connecting i {
   background: var(--cone-500);
   animation: blink 1s infinite;
+  border: 3px solid #000;
 }
 
 @keyframes blink {
@@ -188,9 +194,9 @@ code {
   padding: 0 16px;
   height: 38px;
   border-radius: 10px;
-  border: 1px solid var(--border-strong);
+  border: 3px solid var(--fg);
   background: var(--surface);
-  color: var(--fg);
+  color: #000;
   font-family: inherit;
   font-size: 14px;
   font-weight: 500;
@@ -211,16 +217,17 @@ code {
 
 .btn--primary {
   background: var(--cone-500);
-  border-color: var(--cone-500);
-  color: #fff;
+  /* border-color: var(--cone-500); */
+  border: 3px solid #000;
+  color: #000000;
 }
 .btn--primary:hover:not(:disabled) {
   background: var(--cone-600);
-  border-color: var(--cone-600);
+  border: 3px solid #000;
 }
 
 .btn--ghost {
-  border-color: transparent;
+  border: 3px solid #000;
   background: transparent;
   color: var(--fg-muted);
 }
@@ -230,9 +237,9 @@ code {
 }
 
 .btn--danger {
-  border-color: transparent;
-  background: transparent;
-  color: var(--danger);
+  border: 3px solid #000;
+  background: transparent;;
+  color: #000000;
 }
 .btn--danger:hover:not(:disabled) {
   background: var(--danger-bg);

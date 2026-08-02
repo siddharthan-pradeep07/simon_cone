@@ -3,6 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_TCS34725.h>
+#include <Servo.h>
 
 // ---------------------------------------------------------------------------
 // simon_cone firmware -- optical card reader.
@@ -10,12 +11,13 @@
 // The board is dumb I/O. It streams raw sensor samples and draws whatever text
 // the web app sends it. All the interesting work -- deciding where a card's
 // pass over the sensor starts and ends, turning it into a signature, matching
-// it against enrolled cards -- happens in the browser, where it can be changed
-// without a reflash.
+// it against enrolled cards, tracking swipe/account-creation progress --
+// happens in the browser, where it can be changed without a reflash.
 //
-// The servo gate is gone for now: nothing needs to move for the sensor to see
-// a card pass over it, and an attached servo holding position only adds jitter
-// and current draw. It is a dozen lines in the history if it comes back.
+// The servo is optional and stateless from the board's point of view: it just
+// moves to whatever angle it's told. The browser decides *when* that happens
+// (e.g. on account-creation selection, or once 5/5 swipes are done) and sends
+// a SERVO command at that moment.
 //
 // Protocol: newline-delimited text, 115200 baud.
 //
@@ -25,18 +27,18 @@
 //         SCAN <0|1>              -> OK SCAN   (start/stop the sample stream)
 //         LED <0|1>               -> OK LED    (sensor illuminator)
 //         GAIN <0-3>              -> OK GAIN   (1x, 4x, 16x, 60x)
+//         SERVO <degrees>         -> OK SERVO  (0-180, absolute angle)
 //
 //   out   READY <version>
-//         CFG <scan> <led> <gain>
+//         CFG <scan> <led> <gain> <servo>
 //         FREERAM <bytes>
 //         S <ms> <r> <g> <b> <c>  (~125 Hz while scanning)
 //         ERR <reason>
 // ---------------------------------------------------------------------------
 
-// Bumped for the SWIPE -> SCAN rename: an older board silently answers
-// "ERR unknown command SCAN" and never streams, which is worth being able to
-// spot in the log rather than debugging as a dead sensor.
-#define FW_VERSION "5"
+// Bumped for SERVO: an older board silently answers "ERR unknown command
+// SERVO" rather than moving anything, worth being able to spot in the log.
+#define FW_VERSION "6"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -45,15 +47,9 @@
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// 2.4 ms integration. A card crossing the window is over in a few hundred
-// milliseconds, so the sampling has to be fast enough to catch its structure
-// rather than smear it into one average.
 Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_2_4MS,
                                           TCS34725_GAIN_16X);
 
-// 8 ms gives ~125 samples a second: about 60 across a normal pass, comfortably
-// more than the signature needs, and only a third of the serial link's budget.
-// Polling faster would overrun the 32-byte TX buffer and start blocking loop().
 const unsigned long SCAN_STREAM_MS = 8;
 
 bool tcsOk = false;
@@ -61,6 +57,11 @@ bool displayOk = false;
 bool scanning = false;
 bool ledOn = true;
 uint8_t gainIndex = 2;  // 0=1x 1=4x 2=16x 3=60x
+
+const uint8_t SERVO_PIN = 10;
+const uint8_t SERVO_HOME = 90;   // initial/rest position
+Servo servo;
+uint8_t servoAngle = SERVO_HOME;
 
 unsigned long lastSample = 0;
 
@@ -72,20 +73,15 @@ bool oledDirty = true;
 // --- sensor ----------------------------------------------------------------
 
 const uint8_t TCS_ADDR        = 0x29;
-const uint8_t TCS_CMD_AUTOINC = 0xA0;  // command bit | auto-increment
-const uint8_t TCS_REG_CDATAL  = 0x14;  // c, r, g, b follow contiguously
+const uint8_t TCS_CMD_AUTOINC = 0xA0;
+const uint8_t TCS_REG_CDATAL  = 0x14;
 
-// Adafruit's getRawData() sleeps a full integration period on every call and
-// costs four I2C transactions. The data registers are contiguous, so one
-// auto-increment burst fetches all four channels in a third of the bus time.
 static bool tcsReadAll(uint16_t& c, uint16_t& r, uint16_t& g, uint16_t& b) {
   Wire.beginTransmission(TCS_ADDR);
   Wire.write(TCS_CMD_AUTOINC | TCS_REG_CDATAL);
   if (Wire.endTransmission() != 0) return false;
   if (Wire.requestFrom(TCS_ADDR, (uint8_t)8) != 8) return false;
 
-  // Deliberately not `Wire.read() | (Wire.read() << 8)` -- operand evaluation
-  // order is unspecified, and that bug reads the bytes backwards at random.
   uint16_t lo, hi;
   lo = Wire.read(); hi = Wire.read(); c = (hi << 8) | lo;
   lo = Wire.read(); hi = Wire.read(); r = (hi << 8) | lo;
@@ -103,17 +99,12 @@ void applyGain() {
   }
 }
 
-// On the Adafruit breakout the illuminator is wired to the interrupt pin, so
-// asserting the interrupt is what pulls the LED off. Inverted on purpose.
 void setLed(bool on) {
   if (!tcsOk) return;
   ledOn = on;
   tcs.setInterrupt(!on);
 }
 
-// Raw counts, uncorrected. The browser wants what the photodiodes measured --
-// it works in chromaticity, which divides out brightness anyway, and any
-// correction applied here would just be one more thing to reverse.
 void pumpScan(unsigned long now) {
   if (!scanning || !tcsOk) return;
   if (now - lastSample < SCAN_STREAM_MS) return;
@@ -130,13 +121,22 @@ void pumpScan(unsigned long now) {
   Serial.println(c);
 }
 
+// --- servo -------------------------------------------------------------
+
+// Stateless on purpose: the board doesn't know what a "swipe" or an "account"
+// is, it just moves to the angle it's told. The browser is what decides that
+// selecting account creation means +45 from home, and that 5/5 swipes means
+// back to home -- it sends two SERVO commands, at whatever moments its own
+// state machine reaches those points.
+void setServoAngle(uint8_t degrees) {
+  servoAngle = constrain(degrees, 0, 180);
+  servo.write(servoAngle);
+}
+
 // --- display ---------------------------------------------------------------
 
-// '|' is a line break. The command protocol is newline-delimited, so a literal
-// newline can never appear inside a command -- this is the escape for it, and
-// it is what lets the web app lay the screen out itself.
 void renderOled() {
-  if (!displayOk) return;  // buffer never allocated; drawing would deref null
+  if (!displayOk) return;
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextWrap(true);
@@ -155,10 +155,6 @@ void renderOled() {
   }
   if (run > longest) longest = run;
 
-  // Largest font the content fits: a glyph is 6*size wide and 8*size tall, so
-  // size 4 gives 5 characters across and 2 rows, down to 21 x 8 at size 1.
-  // Short values end up filling the panel, which is the point of having a
-  // screen on the device rather than only in the browser.
   uint8_t size = 4;
   while (size > 1 && (longest > (uint8_t)(128 / (6 * size)) ||
                       lines > (uint8_t)(64 / (8 * size)))) {
@@ -177,7 +173,8 @@ void reportConfig() {
   Serial.print(F("CFG "));
   Serial.print(scanning ? 1 : 0); Serial.print(' ');
   Serial.print(ledOn ? 1 : 0);    Serial.print(' ');
-  Serial.println(gainIndex);
+  Serial.print(gainIndex);       Serial.print(' ');
+  Serial.println(servoAngle);
 }
 
 // --- commands --------------------------------------------------------------
@@ -241,6 +238,15 @@ void handleCommand(char* line) {
     return;
   }
 
+  if (strcmp(line, "SERVO") == 0) {
+    if (arg) {
+      setServoAngle((uint8_t)atoi(arg));
+    }
+    Serial.println(F("OK SERVO"));
+    reportConfig();
+    return;
+  }
+
   Serial.print(F("ERR unknown command "));
   Serial.println(line);
 }
@@ -266,9 +272,6 @@ void setup() {
 
   displayOk = display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS);
   if (!displayOk) {
-    // Nearly always a failed malloc of the 1 KB framebuffer, i.e. out of RAM.
-    // Deliberately not fatal: a board stuck in while(true) goes silent and is
-    // far harder to diagnose than one that keeps talking without a screen.
     Serial.println(F("ERR SSD1306 init failed - out of RAM?"));
   }
 
@@ -279,9 +282,11 @@ void setup() {
     applyGain();
   }
 
-  // Last, because both begin() calls above set the bus speed themselves.
-  // A full-screen redraw drops from ~100 ms to ~25 ms at 400 kHz.
   Wire.setClock(400000);
+
+  servo.attach(SERVO_PIN);
+  servo.write(SERVO_HOME);
+  servoAngle = SERVO_HOME;
 
   strncpy(oledText, "SIMON|CONE", sizeof(oledText) - 1);
   renderOled();
@@ -301,11 +306,6 @@ void loop() {
 
   pumpSerial();
 
-  // Redrawing takes ~25 ms of blocking I2C, which punches a hole in the sample
-  // stream. That is only harmful while a card is actually crossing, and only
-  // the browser knows when that is -- it holds updates back until the slot is
-  // empty. Refusing them here as well would mean the display could never show
-  // anything live, since the stream runs the whole time a reading page is open.
   if (oledDirty) {
     renderOled();
     oledDirty = false;

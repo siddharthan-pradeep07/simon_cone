@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Sample } from './protocol';
+import { FULL_SCALE, type Sample } from './protocol';
 
 /**
  * Turns the colour sensor into a three-position switch.
@@ -31,6 +31,9 @@ import type { Sample } from './protocol';
 
 /** Below this the sensor is looking at the dark, not at a colour. */
 const MIN_CLEAR = 14;
+
+/** At the ADC ceiling the channel ratios are no longer trustworthy. */
+const MAX_CLEAR = FULL_SCALE * 0.98;
 
 /** Below this channel spread the reading is grey/white, not a lane colour. */
 const MIN_SATURATION = 0.14;
@@ -155,10 +158,12 @@ export function useColourLane(onLane: (lane: number) => void) {
     if (
       total <= 0 ||
       sample.c < MIN_CLEAR ||
+      sample.c >= MAX_CLEAR ||
       ![sample.r, sample.g, sample.b, sample.c, sample.t].every(Number.isFinite)
     ) {
       smoothed.current = null;
       candidate.current = { lane: null, since: 0 };
+      committed.current = null;
       live.current = { ...BLANK, clear: sample.c };
       return;
     }
@@ -194,7 +199,14 @@ export function useColourLane(onLane: (lane: number) => void) {
       candidate.current = { lane: seen, since: sample.t };
       return;
     }
-    if (seen === null || seen === committed.current) return;
+    if (seen === null) {
+      // A real release re-arms the same colour. Without this, red -> neutral
+      // -> red calls onLane only once; that breaks after play() resets the cone
+      // to the centre while the hook still remembers red as committed.
+      if (sample.t - candidate.current.since >= HOLD_MS) committed.current = null;
+      return;
+    }
+    if (seen === committed.current) return;
     if (sample.t - candidate.current.since < HOLD_MS) return;
 
     committed.current = seen;

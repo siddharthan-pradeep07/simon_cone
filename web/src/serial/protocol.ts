@@ -79,6 +79,9 @@ export function parseLine(line: string): HardwareEvent {
     // is pure overhead on every sample.
     case 'S': {
       const [t, r, g, b, c] = rest.map(Number);
+      if (rest.length !== 5 || ![t, r, g, b, c].every(Number.isFinite)) {
+        return { type: 'error', message: `malformed sample: ${line}` };
+      }
       return { type: 'sample', sample: { t, r, g, b, c } };
     }
     default:

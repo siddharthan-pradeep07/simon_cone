@@ -11,13 +11,21 @@
   "devDependencies": {
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/three": "^0.185.3",
     "@types/w3c-web-serial": "^1.0.8",
     "@vitejs/plugin-react": "^6.0.5",
+    "playwright": "^1.62.1",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
   },
   "dependencies": {
+    "@fontsource-variable/fredoka": "^5.3.0",
+    "@fontsource/titan-one": "^5.3.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.7.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1",
+    "zustand": "^5.0.14"
   }
 }

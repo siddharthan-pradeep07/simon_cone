@@ -1,61 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { extractSignature } from './cards/signature';
-import { deleteAccount, loadAccounts, type Account as AccountRecord } from './cards/store';
-import { useSwipe, type CapturedSwipe } from './cards/useSwipe';
-import { Cone } from './components/ui';
-import { Account } from './pages/Account';
-import { CreateAccount } from './pages/CreateAccount';
-import { Landing } from './pages/Landing';
-import { Login } from './pages/Login';
+import { LANES } from './game/constants';
+import { Scene } from './game/Scene';
+import { useGame } from './game/store';
 import { command, type HardwareEvent } from './serial/protocol';
+import { useColourLane } from './serial/useColourLane';
 import { useHardware } from './serial/useHardware';
+import { GameOver, Hud, Shout } from './ui/Hud';
+import { Menu } from './ui/Menu';
 import './index.css';
 
-type Route =
-  | { name: 'landing' }
-  | { name: 'create' }
-  | { name: 'login' }
-  | { name: 'account'; id: string };
-
-const STATE_LABEL: Record<string, string> = {
-  unsupported: 'Web Serial unsupported',
-  disconnected: 'Board offline',
-  connecting: 'Starting board…',
-  connected: 'Board ready',
-};
-
-/** Floor on OLED redraws — a full frame is ~25 ms of blocking I2C. */
+/** Floor on OLED redraws — a full frame is ~25 ms of blocking I2C on the board. */
 const MIN_OLED_MS = 350;
 
 /** The firmware's oledText buffer. */
 const OLED_LIMIT = 39;
 
 export default function App() {
-  const [route, setRoute] = useState<Route>({ name: 'landing' });
-  const [accounts, setAccounts] = useState<AccountRecord[]>(() => loadAccounts());
-  const [lastSwipe, setLastSwipe] = useState<CapturedSwipe | null>(null);
+  const phase = useGame((state) => state.phase);
+  const lane = useGame((state) => state.lane);
+  const score = useGame((state) => state.score);
+  const play = useGame((state) => state.play);
+  const toMenu = useGame((state) => state.toMenu);
+  const setLane = useGame((state) => state.setLane);
+  const setSensorLive = useGame((state) => state.setSensorLive);
 
-  // What the current page wants the hardware doing. Pages declare it; this
-  // component is the only thing that talks to the board.
-  const [reader, setReader] = useState({ open: false, oled: 'SIMON|CONE' });
+  const [shout, setShout] = useState({ id: 0, text: '' });
 
-  const seq = useRef(0);
-  const lastOledAt = useRef(0);
-
-  const onSwipe = useCallback((samples: Parameters<typeof extractSignature>[0]) => {
-    seq.current++;
-    const first = samples[0];
-    const last = samples[samples.length - 1];
-    setLastSwipe({
-      seq: seq.current,
-      signature: extractSignature(samples),
-      samples: samples.length,
-      durationMs: first && last ? last.t - first.t : 0,
-    });
-  }, []);
-
-  const swipe = useSwipe(onSwipe);
-  const { feed } = swipe;
+  const colour = useColourLane(setLane);
+  const { feed, reset: resetColour } = colour;
 
   const handleEvent = useCallback(
     (event: HardwareEvent) => {
@@ -68,169 +40,107 @@ export default function App() {
   const { state, send } = hardware;
   const connected = state === 'connected';
 
-  const onReader = useCallback((open: boolean, oled: string) => {
-    setReader((current) =>
-      current.open === open && current.oled === oled ? current : { open, oled },
-    );
-  }, []);
+  useEffect(() => {
+    setSensorLive(connected);
+  }, [connected, setSensorLive]);
 
-  // Opening the gate and starting the stream are one action as far as the app
-  // is concerned: there is no reason to read while the shutter is shut, and no
-  // reason to shut it while a page is waiting for a card.
+  // Unlike the card reader this replaced, the game never stops looking. The
+  // shutter opens once and the stream runs for the whole session; a colour
+  // held up mid-run has to register the moment it appears.
   useEffect(() => {
     if (!connected) return;
-    send(command.gate(reader.open));
-    send(command.swipe(reader.open));
-    if (reader.open) swipe.reset();
-  }, [connected, reader.open, send, swipe]);
+    resetColour();
+    send(command.gain(2));
+    send(command.led(true));
+    send(command.gate(true));
+    send(command.swipe(true));
+    return () => {
+      send(command.swipe(false));
+      send(command.gate(false));
+    };
+  }, [connected, resetColour, send]);
+
+  const lastOledAt = useRef(0);
+  const oled =
+    phase === 'playing'
+      ? `${LANES[lane].oled}|${score}`
+      : phase === 'over'
+        ? `OVER|${score}`
+        : 'SIMON|CONE';
 
   useEffect(() => {
     if (!connected) return;
-    const text = reader.oled.replace(/[\r\n]/g, ' ').slice(0, OLED_LIMIT);
+    const text = oled.replace(/[\r\n]/g, ' ').slice(0, OLED_LIMIT);
     const wait = Math.max(0, MIN_OLED_MS - (Date.now() - lastOledAt.current));
     const timer = window.setTimeout(() => {
       lastOledAt.current = Date.now();
       send(command.oled(text));
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [connected, reader.oled, send]);
+  }, [connected, oled, send]);
 
-  const go = useCallback((next: Route) => {
-    setLastSwipe(null);
-    setRoute(next);
+  useEffect(() => {
+    if (phase === 'playing') setShout((current) => ({ id: current.id + 1, text: 'GO!' }));
+  }, [phase]);
+
+  // The keyboard is not a fallback for the reader, it is how the game gets
+  // tested and how anyone without the board can still play it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const current = useGame.getState();
+      const key = event.key.toLowerCase();
+
+      // No mute control on screen any more, but the shortcut stays: it costs
+      // nothing and it is the only way to silence the game.
+      if (key === 'm') {
+        current.toggleMute();
+        return;
+      }
+      if (key === 'escape') {
+        if (current.phase === 'playing') current.endRun();
+        else if (current.phase === 'over') current.toMenu();
+        return;
+      }
+      if (key === 'enter' || key === ' ') {
+        if (current.phase === 'menu' || current.phase === 'over') {
+          event.preventDefault();
+          current.play();
+        }
+        return;
+      }
+      if (current.phase !== 'playing' && current.phase !== 'intro') return;
+
+      if (key === 'arrowleft' || key === 'a') current.setLane(current.lane - 1);
+      else if (key === 'arrowright' || key === 'd') current.setLane(current.lane + 1);
+      else if (key >= '1' && key <= '3') current.setLane(Number(key) - 1);
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const account =
-    route.name === 'account'
-      ? (accounts.find((entry) => entry.id === route.id) ?? null)
-      : null;
-
   return (
-    <div className="shell">
-      <header className="topbar">
-        <button className="brand" onClick={() => go({ name: 'landing' })}>
-          <Cone className="cone-mark" />
-          Simon Cone
-        </button>
-        <div className="topbar__right">
-          <span className={`pill pill--${state}`}>
-            <i /> {STATE_LABEL[state]}
-          </span>
-          {state === 'connected' || state === 'connecting' ? (
-            <button className="btn" onClick={() => void hardware.disconnect()}>
-              Disconnect
-            </button>
-          ) : (
-            <button
-              className="btn btn--primary"
-              disabled={state === 'unsupported'}
-              onClick={() => void hardware.connect()}
-            >
-              Connect board
-            </button>
-          )}
-        </div>
-      </header>
+    <>
+      <Scene />
 
-      <main className="main">
-        {state === 'unsupported' && (
-          <p className="notice notice--error" style={{ marginBottom: 20 }}>
-            This browser has no Web Serial API. Use Chrome, Edge or Opera on desktop.
-          </p>
-        )}
-        {hardware.error && (
-          <p className="notice notice--error" style={{ marginBottom: 20 }}>
-            {hardware.error}
-          </p>
-        )}
+      {phase === 'menu' && (
+        <Menu
+          device={{
+            state,
+            error: hardware.error,
+            connect: () => void hardware.connect(),
+            disconnect: () => void hardware.disconnect(),
+            calibrate: colour.calibrate,
+          }}
+          onPlay={play}
+        />
+      )}
 
-        {route.name === 'landing' && (
-          <Landing
-            accounts={accounts.length}
-            onCreate={() => go({ name: 'create' })}
-            onSwipe={() => go({ name: 'login' })}
-          />
-        )}
+      {(phase === 'playing' || phase === 'intro') && <Hud score={score} />}
 
-        {route.name === 'create' && (
-          <CreateAccount
-            lastSwipe={lastSwipe}
-            meter={swipe.meter}
-            ready={connected && reader.open}
-            onReader={onReader}
-            onCancel={() => go({ name: 'landing' })}
-            onDone={(created) => {
-              setAccounts(loadAccounts());
-              go({ name: 'account', id: created.id });
-            }}
-          />
-        )}
+      {phase === 'over' && <GameOver score={score} onPlay={play} onMenu={toMenu} />}
 
-        {route.name === 'login' && (
-          <Login
-            accounts={accounts}
-            lastSwipe={lastSwipe}
-            meter={swipe.meter}
-            ready={connected && reader.open}
-            onReader={onReader}
-            onCancel={() => go({ name: 'landing' })}
-            onMatch={(matched) => go({ name: 'account', id: matched.id })}
-          />
-        )}
-
-        {route.name === 'account' &&
-          (account ? (
-            <Account
-              account={account}
-              onReader={onReader}
-              onSignOut={() => go({ name: 'landing' })}
-              onDelete={(id) => {
-                setAccounts(deleteAccount(id));
-                go({ name: 'landing' });
-              }}
-            />
-          ) : (
-            <p className="notice">That account no longer exists.</p>
-          ))}
-
-        <details className="debug">
-          <summary>Board log</summary>
-          <ol className="log">
-            {hardware.logs.length === 0 && <li>Nothing yet.</li>}
-            {hardware.logs
-              .slice(-60)
-              .reverse()
-              .map((entry) => (
-                <li key={entry.id} className={`log__line--${entry.direction}`}>
-                  <span className="log__dir">
-                    {entry.direction === 'in' ? '<-' : entry.direction === 'out' ? '->' : '**'}
-                  </span>
-                  <span>{entry.text}</span>
-                </li>
-              ))}
-          </ol>
-          <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn" onClick={() => send(command.gate(!reader.open))}>
-              Toggle gate
-            </button>
-            <button className="btn" onClick={() => send(command.gain(1))}>
-              Gain 4x
-            </button>
-            <button className="btn" onClick={() => send(command.gain(2))}>
-              Gain 16x
-            </button>
-            <button className="btn" onClick={hardware.clearLogs}>
-              Clear log
-            </button>
-          </div>
-          {lastSwipe && (
-            <p className="subtle" style={{ marginTop: 10 }}>
-              Last swipe: {lastSwipe.samples} samples over {lastSwipe.durationMs} ms
-              {lastSwipe.signature ? '' : ' — too short to use'}
-            </p>
-          )}
-        </details>
-      </main>
-    </div>
+      {shout.text && phase === 'playing' && <Shout text={shout.text} id={shout.id} />}
+    </>
   );
 }

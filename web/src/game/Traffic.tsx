@@ -28,6 +28,12 @@ import { makePuffTexture } from './textures';
 
 const MODEL_URLS = CAR_MODELS.map((name) => `/models/cars/${name}.glb`);
 
+/** Share of cars placed directly in the cone's path, forcing a lane change. */
+const AIMED_AT_PLAYER = 0.78;
+
+/** Nearer than this and a car is aimed away — there is no time to answer it. */
+const REACTION_ROOM = 70;
+
 interface Car {
   node: Group;
   lane: number;
@@ -140,14 +146,19 @@ export function Traffic() {
     const car = pool.find((entry) => entry.idle);
     if (!car) return;
 
-    // Cars close enough that the player has no time to react are kept out of
-    // the lane the cone is already in — one resolving out of the fog directly
-    // in front of them is not a dodge to be made, it is a coin toss to be
-    // lost. Further down the road that does not apply, and must not: it would
-    // leave the lane the player starts in permanently, conspicuously empty.
-    const near = at < 110;
-    const options = near ? [0, 1, 2].filter((lane) => lane !== runtime.targetLane) : [0, 1, 2];
-    car.lane = options[Math.floor(Math.random() * options.length)];
+    // Most cars are put in the lane the cone is in right now.
+    //
+    // Reading colours to change lane is the entire game, so traffic that lands
+    // anywhere else is scenery: the player watches it go by and never touches
+    // the sensor. Aimed at them, every car is a question. This is only fair
+    // because it is decided the moment the car is placed — a full road's
+    // length away, with seconds to answer — and the ones placed too close to
+    // react to are aimed away from the player instead.
+    const others = [0, 1, 2].filter((lane) => lane !== runtime.targetLane);
+    car.lane =
+      at >= REACTION_ROOM && Math.random() < AIMED_AT_PLAYER
+        ? runtime.targetLane
+        : others[Math.floor(Math.random() * others.length)];
     car.z = -at - runtime.distance;
     car.idle = false;
     car.node.visible = true;

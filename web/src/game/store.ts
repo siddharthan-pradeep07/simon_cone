@@ -25,6 +25,13 @@ export const runtime = {
   height: 1,
   /** How much of the game's speed the world is running at: 0 idle, 1 full. */
   worldBlend: 0,
+  /**
+   * Whether the eyes and smile should be drawn. Owned by the cone's animation,
+   * which is the only thing that knows how far through a tumble it is, and
+   * read by the face — the face is not welded to a phase because a phase can
+   * change while the cone is still halfway through turning over.
+   */
+  showFace: true,
 };
 
 export function resetRuntime() {
@@ -77,6 +84,8 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   endRun: () => {
+    if (get().phase !== 'playing') return;
+    sound.crash();
     sound.over();
     set({ phase: 'over' });
   },

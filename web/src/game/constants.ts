@@ -78,8 +78,8 @@ export const CAR_SPAWN_Z = -190;
 export const CAR_RETIRE_Z = 26;
 
 /** Road covered between one car and the next. */
-export const CAR_GAP_MIN = 44;
-export const CAR_GAP_MAX = 78;
+export const CAR_GAP_MIN = 38;
+export const CAR_GAP_MAX = 62;
 
 /** Half-extents of the box used for hitting a car. Forgiving on purpose. */
 export const CAR_HIT_X = 1.7;

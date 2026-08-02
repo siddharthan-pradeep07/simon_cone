@@ -55,6 +55,12 @@ const easeOutBack = (t: number) => {
 /** Frame-rate independent approach, so the feel does not change with refresh rate. */
 const approach = (current: number, target: number, rate: number, delta: number) =>
   current + (target - current) * (1 - Math.exp(-rate * delta));
+/** Folds any angle into (-π, π], so easing towards a pose takes the short way. */
+const wrapAngle = (value: number) =>
+  value - Math.PI * 2 * Math.round(value / (Math.PI * 2));
+
+/** How long the cone stays gone after a crash, in seconds. */
+const RESPAWN_DELAY = 0.5;
 
 /**
  * Where the cone's surface actually is, found by firing a ray at it.
@@ -196,9 +202,7 @@ function Face({ profile }: { profile: Profile }) {
   useFrame(() => {
     const target = group.current;
     if (!target) return;
-    const phase = useGame.getState().phase;
-    target.visible =
-      phase === 'menu' || phase === 'over' || (phase === 'intro' && runtime.intro < 0.45);
+    target.visible = runtime.showFace;
   });
 
   return (
@@ -330,6 +334,9 @@ export function Cone() {
   const clock = useRef(0);
   const spin = useRef({ from: 0, to: 0 });
   const wasIntro = useRef(false);
+  const wasPlaying = useRef(false);
+  /** Seconds since the crash. Drives the cone off screen and back again. */
+  const respawn = useRef(Infinity);
 
   useFrame((_, rawDelta) => {
     const delta = Math.min(rawDelta, 0.05);
@@ -340,8 +347,29 @@ export function Cone() {
     clock.current += delta;
     const phase = useGame.getState().phase;
 
+    if (phase === 'playing') {
+      wasPlaying.current = true;
+    } else if (wasPlaying.current) {
+      wasPlaying.current = false;
+      respawn.current = 0;
+      // Whatever whole turns the flight spin racked up, wind them off before
+      // easing back to the title pose. Left as-is this is a value of 4π being
+      // eased towards nearly zero, and the cone whips through two full
+      // rotations on its way back to standing still.
+      inner.rotation.y = wrapAngle(inner.rotation.y);
+    }
+
     if (phase === 'menu' || phase === 'over') {
       wasIntro.current = false;
+      respawn.current += delta;
+
+      // Gone for the length of the fireball, then popped back in. A cone that
+      // simply flies home from the wreck did not really explode.
+      const back = clamp01((respawn.current - RESPAWN_DELAY) / 0.45);
+      group.scale.setScalar(respawn.current < RESPAWN_DELAY ? 0 : easeOutBack(back));
+      // Only once it is visible again does the face come back with it.
+      runtime.showFace = back > 0.25;
+
       const bob = Math.sin(clock.current * 1.7) * 0.07;
       group.position.x = approach(group.position.x, CONE_MENU_POSITION[0], 5, delta);
       group.position.y = approach(group.position.y, CONE_MENU_POSITION[1] + bob, 5, delta);
@@ -360,6 +388,10 @@ export function Cone() {
       runtime.height = group.position.y;
       return;
     }
+
+    group.scale.setScalar(1);
+    respawn.current = Infinity;
+    runtime.showFace = phase === 'intro' && runtime.intro < 0.45;
 
     if (phase === 'intro' && !wasIntro.current) {
       wasIntro.current = true;

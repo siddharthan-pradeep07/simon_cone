@@ -3,6 +3,7 @@ import { Suspense } from 'react';
 import { ACESFilmicToneMapping, FogExp2 } from 'three';
 import { FOG_COLOUR } from './constants';
 import { Cone, ConeShadow } from './Cone';
+import { Explosion } from './Explosion';
 import { CameraRig, GameLoop } from './GameLoop';
 import { Sky } from './Sky';
 import { Track } from './Track';
@@ -46,6 +47,7 @@ export function Scene() {
       </Suspense>
       <ConeShadow />
       <Cone />
+      <Explosion />
     </Canvas>
   );
 }

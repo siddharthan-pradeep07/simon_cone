@@ -184,27 +184,7 @@ body {
   padding: 0 clamp(24px, 5vw, 90px);
 }
 
-/* A wash of colour behind the whole title screen.
- *
- * The scene behind it is a bright sky over a bright road, and white type on
- * that is legible only because of the shadow carrying it. This sits between
- * the two: it darkens and warms the frame enough for the panel to read as
- * being on something, deepens towards the corners so the middle of the road
- * stays clear, and lifts the right-hand side where the buttons are. */
-.menu::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(120% 90% at 78% 52%, rgba(38, 22, 58, 0.5), transparent 62%),
-    radial-gradient(90% 70% at 20% 90%, rgba(255, 138, 61, 0.22), transparent 70%),
-    linear-gradient(to bottom, rgba(28, 18, 48, 0.34), transparent 34%, rgba(28, 18, 48, 0.28));
-  animation: fade-in 700ms ease both;
-}
-
 .menu__panel {
-  position: relative;
   grid-column: 2;
   display: flex;
   flex-direction: column;

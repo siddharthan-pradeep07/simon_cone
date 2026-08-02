@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import type { ColourReading } from '../serial/useColourLane';
 import type { ConnectionState } from '../serial/useHardware';
 import { Button, ConnectButton } from './parts';
 
@@ -6,10 +8,25 @@ export interface DeviceProps {
   error: string | null;
   connect: () => void;
   disconnect: () => void;
-  calibrate: () => void;
+  calibrate: () => boolean;
+  reading: ColourReading;
 }
 
 export function Menu({ device, onPlay }: { device: DeviceProps; onPlay: () => void }) {
+  const [calibration, setCalibration] = useState<string | null>(null);
+  const detected = device.reading.lane === null
+    ? null
+    : ['Red', 'Green', 'Blue'][device.reading.lane];
+
+  const calibrate = () => {
+    const ok = device.calibrate();
+    setCalibration(
+      ok
+        ? 'Calibrated — now show red, green, or blue.'
+        : 'No reading yet. Hold white over the sensor and try again.',
+    );
+  };
+
   return (
     <div className="overlay">
       <div className="menu">
@@ -31,14 +48,31 @@ export function Menu({ device, onPlay }: { device: DeviceProps; onPlay: () => vo
             />
 
             {device.state === 'connected' && (
-              <Button
-                tone="quiet"
-                size="small"
-                onClick={device.calibrate}
-                title="Hold plain white under the reader first"
-              >
-                Calibrate white
-              </Button>
+              <>
+                <div className={`sensor-readout sensor-readout--${detected?.toLowerCase() ?? 'none'}`}>
+                  <i />
+                  <span>{detected ? `Detecting ${detected}` : 'No colour detected'}</span>
+                  <small>
+                    R {Math.round(device.reading.chroma.r * 100)} · G{' '}
+                    {Math.round(device.reading.chroma.g * 100)} · B{' '}
+                    {Math.round(device.reading.chroma.b * 100)} · light{' '}
+                    {Math.round(device.reading.clear)}
+                  </small>
+                </div>
+                <Button
+                  tone="quiet"
+                  size="small"
+                  onClick={calibrate}
+                  title="Hold plain white over the reader, then click"
+                >
+                  Calibrate white
+                </Button>
+                {calibration && (
+                  <p className="calibration-message" role="status">
+                    {calibration}
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>

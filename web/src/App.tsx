@@ -17,7 +17,6 @@ const OLED_LIMIT = 39;
 
 export default function App() {
   const phase = useGame((state) => state.phase);
-  const lane = useGame((state) => state.lane);
   const score = useGame((state) => state.score);
   const play = useGame((state) => state.play);
   const toMenu = useGame((state) => state.toMenu);
@@ -57,12 +56,16 @@ export default function App() {
   }, [connected, resetColour, send]);
 
   const lastOledAt = useRef(0);
+  const detected =
+    colour.reading.lane === null ? 'NONE' : LANES[colour.reading.lane].oled;
   const oled =
     phase === 'playing'
-      ? `${LANES[lane].oled}|${score}`
+      ? `${detected}|${score}`
       : phase === 'over'
         ? `OVER|${score}`
-        : 'SIMON|CONE';
+        : connected
+          ? `SEES|${detected}`
+          : 'SIMON|CONE';
 
   useEffect(() => {
     if (!connected) return;
@@ -127,6 +130,7 @@ export default function App() {
             connect: () => void hardware.connect(),
             disconnect: () => void hardware.disconnect(),
             calibrate: colour.calibrate,
+            reading: colour.reading,
           }}
           onPlay={play}
         />

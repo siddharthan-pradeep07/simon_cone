@@ -181,10 +181,28 @@ function Smile({ profile }: { profile: Profile }) {
   );
 }
 
-/** Eyes and a smile, applied to whatever cone is underneath. */
+/**
+ * Eyes and a smile, applied to whatever cone is underneath — and taken off
+ * again the moment it tips over into flight.
+ *
+ * Nose-forward, the flank the face is painted on is raked away from the camera
+ * and most of what is left on screen is the back of the cone. The face reads
+ * as a squashed smear on a surface it no longer fits, so it comes off halfway
+ * through the launch, while the cone is spinning and nobody can see it go.
+ */
 function Face({ profile }: { profile: Profile }) {
+  const group = useRef<Group>(null);
+
+  useFrame(() => {
+    const target = group.current;
+    if (!target) return;
+    const phase = useGame.getState().phase;
+    target.visible =
+      phase === 'menu' || phase === 'over' || (phase === 'intro' && runtime.intro < 0.45);
+  });
+
   return (
-    <group>
+    <group ref={group}>
       <Eye side={-1} profile={profile} />
       <Eye side={1} profile={profile} />
       <Smile profile={profile} />

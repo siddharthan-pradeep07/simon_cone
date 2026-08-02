@@ -17,7 +17,7 @@ export interface Lane {
   oled: string;
 }
 
-export const LANE_WIDTH = 3.5;
+export const LANE_WIDTH = 4.6;
 
 export const LANES: Lane[] = [
   {
@@ -61,6 +61,32 @@ export const SPEED_START = 22;
 
 /** Metres of road per point of score. */
 export const UNITS_PER_POINT = 2;
+
+/** Traffic. Cars sit still in a lane and the cone has to go round them. */
+export const CAR_MODELS = ['taxi', 'van', 'suv'] as const;
+
+/** How many cars exist at once. They are recycled, never created mid-run. */
+export const CAR_POOL = 10;
+
+/** Nose to tail, in world units. Every model is scaled to this. */
+export const CAR_LENGTH = 4.6;
+
+/** Where a car is placed, far enough out to still be inside the fog. */
+export const CAR_SPAWN_Z = -190;
+
+/** Far enough past the camera that a car is never seen to disappear. */
+export const CAR_RETIRE_Z = 26;
+
+/** Road covered between one car and the next. */
+export const CAR_GAP_MIN = 44;
+export const CAR_GAP_MAX = 78;
+
+/** Half-extents of the box used for hitting a car. Forgiving on purpose. */
+export const CAR_HIT_X = 1.7;
+export const CAR_HIT_Z = 2.4;
+
+/** Seconds of clear road after the launch before any traffic appears. */
+export const CAR_GRACE = 1.6;
 
 /** How hard the cone is pulled toward its lane, and how much it fights back. */
 export const LANE_STIFFNESS = 150;

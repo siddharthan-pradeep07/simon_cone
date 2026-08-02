@@ -6,6 +6,7 @@ import { Cone, ConeShadow } from './Cone';
 import { CameraRig, GameLoop } from './GameLoop';
 import { Sky } from './Sky';
 import { Track } from './Track';
+import { Traffic } from './Traffic';
 
 /** Where the road fades out. Matches the haze at the sky's horizon. */
 const FOG = new FogExp2(FOG_COLOUR, 0.011);
@@ -40,6 +41,9 @@ export function Scene() {
       </Suspense>
 
       <Track />
+      <Suspense fallback={null}>
+        <Traffic />
+      </Suspense>
       <ConeShadow />
       <Cone />
     </Canvas>

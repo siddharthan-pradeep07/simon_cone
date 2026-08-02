@@ -125,6 +125,19 @@ export const sound = {
     noise(0.18, 900, 2400, 0.14);
   },
 
+  /**
+   * Hitting a car. A crack of noise sweeping downward for the blast, under it
+   * a pitch dropping through the floor for the weight, and a low rumble
+   * arriving a beat late — an explosion you hear the size of before you hear
+   * the end of.
+   */
+  crash: () => {
+    noise(0.5, 4200, 260, 0.65);
+    noise(0.9, 700, 60, 0.4, 0.04);
+    tone({ from: 180, to: 32, duration: 0.75, type: 'sawtooth', gain: 0.3 });
+    tone({ from: 90, to: 28, duration: 1, type: 'sine', gain: 0.34, delay: 0.03 });
+  },
+
   /** End of a run. */
   over: () => {
     tone({ from: 520, to: 160, duration: 0.55, type: 'sawtooth', gain: 0.24 });

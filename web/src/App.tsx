@@ -44,20 +44,16 @@ export default function App() {
     setSensorLive(connected);
   }, [connected, setSensorLive]);
 
-  // Unlike the card reader this replaced, the game never stops looking. The
-  // shutter opens once and the stream runs for the whole session; a colour
-  // held up mid-run has to register the moment it appears.
+  // The game treats the sensor as a live three-way controller. Firmware v5+
+  // exposes that stream as SCAN; it is enabled once on connection and remains
+  // enabled so a colour shown during a run is acted on immediately.
   useEffect(() => {
     if (!connected) return;
     resetColour();
     send(command.gain(2));
     send(command.led(true));
-    send(command.gate(true));
-    send(command.swipe(true));
-    return () => {
-      send(command.swipe(false));
-      send(command.gate(false));
-    };
+    send(command.scan(true));
+    return () => send(command.scan(false));
   }, [connected, resetColour, send]);
 
   const lastOledAt = useRef(0);

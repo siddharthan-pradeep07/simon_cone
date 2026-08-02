@@ -12,9 +12,13 @@ import type { Sample } from './protocol';
  *   Brightness and distance -> chromaticity, r/(r+g+b). Moving the card closer
  *     scales all three channels together, so dividing by their sum cancels it.
  *
- *   The sensor's own bias -> subtract a calibrated neutral. A TCS34725 looking
+ *   The sensor's own bias -> divide by a calibrated neutral. A TCS34725 looking
  *     at white paper does not read a third in each channel; it leans green.
  *     Without this, white reads as a lane and the cone drifts on its own.
+ *
+ *   Infrared bleed -> remove the estimate from ams DN40 before either step.
+ *     The unfiltered sensor leaks infrared mainly into red; without correcting
+ *     it, dark blue objects can be pulled toward the red lane.
  *
  *   Noise and the moment of the swap -> smooth, then require the answer to hold
  *     still before acting on it. Colours smear into each other while a card is
@@ -28,8 +32,8 @@ import type { Sample } from './protocol';
 /** Below this the sensor is looking at the dark, not at a colour. */
 const MIN_CLEAR = 14;
 
-/** How far above neutral a channel must sit to count as that colour. */
-const MIN_DEVIATION = 0.022;
+/** Below this channel spread the reading is grey/white, not a lane colour. */
+const MIN_SATURATION = 0.14;
 
 /** Milliseconds a reading has to hold before the cone moves. */
 const HOLD_MS = 70;
@@ -37,7 +41,9 @@ const HOLD_MS = 70;
 /** Weight of each new sample in the running average. */
 const SMOOTHING = 0.25;
 
-const BASELINE_KEY = 'simon-cone:white-balance';
+// v2 baselines are captured after IR removal. Reusing a v1 value (captured
+// from raw channels) would apply the old red bias a second time.
+const BASELINE_KEY = 'simon-cone:white-balance:v2';
 
 export interface Chromaticity {
   r: number;
@@ -46,6 +52,64 @@ export interface Chromaticity {
 }
 
 const NEUTRAL: Chromaticity = { r: 1 / 3, g: 1 / 3, b: 1 / 3 };
+
+/** Shortest distance around the hue wheel, in degrees. */
+const hueGap = (a: number, b: number) => {
+  const raw = Math.abs(a - b) % 360;
+  return raw > 180 ? 360 - raw : raw;
+};
+
+/**
+ * Maps a balanced chromaticity to the nearest of the game's three primaries.
+ *
+ * Dividing by the calibrated white point corrects the sensor/illuminator bias.
+ * Hue then makes "nearest" literal: red is 0°, green 120°, blue 240°. This
+ * behaves sensibly for in-between cards too (cyan is equally close to green
+ * and blue) instead of merely choosing whichever raw photodiode count won.
+ */
+export function nearestLane(
+  chroma: Chromaticity,
+  white: Chromaticity = NEUTRAL,
+): { lane: number | null; strength: number } {
+  const r = chroma.r / Math.max(white.r, 0.001);
+  const g = chroma.g / Math.max(white.g, 0.001);
+  const b = chroma.b / Math.max(white.b, 0.001);
+  const peak = Math.max(r, g, b);
+  const floor = Math.min(r, g, b);
+  const delta = peak - floor;
+  const saturation = peak > 0 ? delta / peak : 0;
+  if (!Number.isFinite(saturation) || saturation < MIN_SATURATION) {
+    return { lane: null, strength: 0 };
+  }
+
+  let hue: number;
+  if (peak === r) hue = (60 * (g - b)) / delta;
+  else if (peak === g) hue = (60 * (b - r)) / delta + 120;
+  else hue = (60 * (r - g)) / delta + 240;
+  if (hue < 0) hue += 360;
+
+  const centres = [0, 120, 240];
+  let lane = 0;
+  for (let index = 1; index < centres.length; index++) {
+    if (hueGap(hue, centres[index]) < hueGap(hue, centres[lane])) lane = index;
+  }
+  return { lane, strength: Math.min(1, saturation) };
+}
+
+/**
+ * TCS34725 infrared correction from ams application note DN40. Infrared leaks
+ * mostly into red; removing it before chromaticity stops dark blue objects
+ * being pulled toward the red lane.
+ */
+function removeInfrared(sample: Sample) {
+  const sum = sample.r + sample.g + sample.b;
+  const infrared = sum > sample.c ? (sum - sample.c) / 2 : 0;
+  return {
+    r: Math.max(0, sample.r - infrared),
+    g: Math.max(0, sample.g - infrared),
+    b: Math.max(0, sample.b - infrared),
+  };
+}
 
 export interface ColourReading {
   /** Which lane the sensor is currently seeing, or null for neutral or dark. */
@@ -85,9 +149,14 @@ export function useColourLane(onLane: (lane: number) => void) {
   onLaneRef.current = onLane;
 
   const feed = useCallback((sample: Sample) => {
-    const total = sample.r + sample.g + sample.b;
+    const corrected = removeInfrared(sample);
+    const total = corrected.r + corrected.g + corrected.b;
 
-    if (total <= 0 || sample.c < MIN_CLEAR) {
+    if (
+      total <= 0 ||
+      sample.c < MIN_CLEAR ||
+      ![sample.r, sample.g, sample.b, sample.c, sample.t].every(Number.isFinite)
+    ) {
       smoothed.current = null;
       candidate.current = { lane: null, since: 0 };
       live.current = { ...BLANK, clear: sample.c };
@@ -95,9 +164,9 @@ export function useColourLane(onLane: (lane: number) => void) {
     }
 
     const next: Chromaticity = {
-      r: sample.r / total,
-      g: sample.g / total,
-      b: sample.b / total,
+      r: corrected.r / total,
+      g: corrected.g / total,
+      b: corrected.b / total,
     };
 
     const previous = smoothed.current ?? next;
@@ -108,23 +177,14 @@ export function useColourLane(onLane: (lane: number) => void) {
     };
     smoothed.current = chroma;
 
-    // Because chromaticity and the baseline both sum to one, these deviations
-    // sum to zero — so the largest of them is already the winning channel and
-    // there is nothing more to normalise.
     const white = baselineRef.current;
-    const deviation = [chroma.r - white.r, chroma.g - white.g, chroma.b - white.b];
-
-    let lane = 0;
-    for (let index = 1; index < 3; index++) {
-      if (deviation[index] > deviation[lane]) lane = index;
-    }
-    const margin = deviation[lane];
-    const seen = margin >= MIN_DEVIATION ? lane : null;
+    const nearest = nearestLane(chroma, white);
+    const seen = nearest.lane;
 
     live.current = {
       lane: seen,
       chroma,
-      strength: Math.min(1, margin / (MIN_DEVIATION * 3)),
+      strength: nearest.strength,
       clear: sample.c,
     };
 

@@ -102,9 +102,11 @@ $banner | ForEach-Object { Write-Output $_ }
 $ready = $banner | Where-Object { $_ -match '^READY\s+(\S+)' } | Select-Object -First 1
 if (-not $ready) {
   Write-Output 'WARNING: no READY line. Could not confirm which firmware is running.'
-} elseif ($ready -notmatch '^READY\s+5$') {
+} elseif ($ready -match '^READY\s+(\d+)$' -and [int]$Matches[1] -lt 5) {
   Write-Output "WARNING: this is '$ready'. Builds before 5 do not know SCAN and will never stream."
   Write-Output '         Reflash with: pio run -t upload'
+} elseif ($ready -notmatch '^READY\s+\d+$') {
+  Write-Output "WARNING: unrecognised firmware banner '$ready'."
 }
 
 if ($Gain -ge 0) {

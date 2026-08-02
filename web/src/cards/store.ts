@@ -1,31 +1,37 @@
 /** Accounts, kept in localStorage. No server exists — this is the whole store. */
 
-import type { Template } from './signature';
-
 export interface Account {
   id: string;
   name: string;
   balance: number;
-  template: Template;
-  /** How many swipes the template was built from. */
-  swipes: number;
+  /**
+   * The dataset: one colour list per enrolment swipe. Several rather than one
+   * because two swipes of the same card never read identically, and the spread
+   * between them is the variation the matcher has to tolerate. Storing them all
+   * means that variation is covered by example rather than guessed at.
+   */
+  recordings: string[][];
   createdAt: number;
 }
 
-const KEY = 'simon_cone.accounts.v1';
+// v3: colour-name datasets. v1 held numeric signature templates and v2 held
+// fixed six-colour passcodes; neither can be turned into a set of swipe
+// recordings, so those accounts are left under their own keys rather than
+// half-converted into something that would not match.
+const KEY = 'simon_cone.accounts.v3';
 
 export function loadAccounts(): Account[] {
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Account[];
-    // Anything hand-edited or left over from an older shape is dropped rather
-    // than allowed to crash the matcher with a malformed template.
     return parsed.filter(
       (account) =>
         account &&
         typeof account.name === 'string' &&
-        Array.isArray(account.template?.mean),
+        Array.isArray(account.recordings) &&
+        account.recordings.length > 0 &&
+        account.recordings.every((recording) => Array.isArray(recording)),
     );
   } catch {
     return [];

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { extractSignature } from './cards/signature';
+import { usePassReader, type CapturedPass } from './cards/pass';
 import { deleteAccount, loadAccounts, type Account as AccountRecord } from './cards/store';
-import { useSwipe, type CapturedSwipe } from './cards/useSwipe';
 import { Cone } from './components/ui';
 import { Account } from './pages/Account';
 import { CreateAccount } from './pages/CreateAccount';
@@ -33,7 +32,9 @@ const OLED_LIMIT = 39;
 export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'landing' });
   const [accounts, setAccounts] = useState<AccountRecord[]>(() => loadAccounts());
-  const [lastSwipe, setLastSwipe] = useState<CapturedSwipe | null>(null);
+  const [lastPass, setLastPass] = useState<{ pass: CapturedPass; seq: number } | null>(
+    null,
+  );
 
   // What the current page wants the hardware doing. Pages declare it; this
   // component is the only thing that talks to the board.
@@ -42,20 +43,13 @@ export default function App() {
   const seq = useRef(0);
   const lastOledAt = useRef(0);
 
-  const onSwipe = useCallback((samples: Parameters<typeof extractSignature>[0]) => {
+  const onPass = useCallback((pass: CapturedPass) => {
     seq.current++;
-    const first = samples[0];
-    const last = samples[samples.length - 1];
-    setLastSwipe({
-      seq: seq.current,
-      signature: extractSignature(samples),
-      samples: samples.length,
-      durationMs: first && last ? last.t - first.t : 0,
-    });
+    setLastPass({ pass, seq: seq.current });
   }, []);
 
-  const swipe = useSwipe(onSwipe);
-  const { feed } = swipe;
+  const detector = usePassReader(onPass);
+  const { feed, reset, state } = detector;
 
   const handleEvent = useCallback(
     (event: HardwareEvent) => {
@@ -65,8 +59,8 @@ export default function App() {
   );
 
   const hardware = useHardware(handleEvent);
-  const { state, send } = hardware;
-  const connected = state === 'connected';
+  const { state: link, send } = hardware;
+  const connected = link === 'connected';
 
   const onReader = useCallback((open: boolean, oled: string) => {
     setReader((current) =>
@@ -74,18 +68,19 @@ export default function App() {
     );
   }, []);
 
-  // Opening the gate and starting the stream are one action as far as the app
-  // is concerned: there is no reason to read while the shutter is shut, and no
-  // reason to shut it while a page is waiting for a card.
+  // `open` means "this page wants to read". Streaming stops elsewhere so the
+  // log stays legible and the board is not talking for no reason.
   useEffect(() => {
     if (!connected) return;
-    send(command.gate(reader.open));
-    send(command.swipe(reader.open));
-    if (reader.open) swipe.reset();
-  }, [connected, reader.open, send, swipe]);
+    send(command.scan(reader.open));
+    if (reader.open) reset();
+  }, [connected, reader.open, send, reset]);
 
+  // A redraw is ~25 ms of blocking I2C on the board, which would punch a hole in
+  // the sample stream. Harmless while the sensor is clear, ruinous in the middle
+  // of a swipe — so updates wait for the gap between them.
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || state.present) return;
     const text = reader.oled.replace(/[\r\n]/g, ' ').slice(0, OLED_LIMIT);
     const wait = Math.max(0, MIN_OLED_MS - (Date.now() - lastOledAt.current));
     const timer = window.setTimeout(() => {
@@ -93,10 +88,10 @@ export default function App() {
       send(command.oled(text));
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [connected, reader.oled, send]);
+  }, [connected, reader.oled, send, state.present]);
 
   const go = useCallback((next: Route) => {
-    setLastSwipe(null);
+    setLastPass(null);
     setRoute(next);
   }, []);
 
@@ -113,17 +108,17 @@ export default function App() {
           Simon Cone
         </button>
         <div className="topbar__right">
-          <span className={`pill pill--${state}`}>
-            <i /> {STATE_LABEL[state]}
+          <span className={`pill pill--${link}`}>
+            <i /> {STATE_LABEL[link]}
           </span>
-          {state === 'connected' || state === 'connecting' ? (
+          {link === 'connected' || link === 'connecting' ? (
             <button className="btn" onClick={() => void hardware.disconnect()}>
               Disconnect
             </button>
           ) : (
             <button
               className="btn btn--primary"
-              disabled={state === 'unsupported'}
+              disabled={link === 'unsupported'}
               onClick={() => void hardware.connect()}
             >
               Connect board
@@ -133,7 +128,7 @@ export default function App() {
       </header>
 
       <main className="main">
-        {state === 'unsupported' && (
+        {link === 'unsupported' && (
           <p className="notice notice--error" style={{ marginBottom: 20 }}>
             This browser has no Web Serial API. Use Chrome, Edge or Opera on desktop.
           </p>
@@ -148,14 +143,14 @@ export default function App() {
           <Landing
             accounts={accounts.length}
             onCreate={() => go({ name: 'create' })}
-            onSwipe={() => go({ name: 'login' })}
+            onSignIn={() => go({ name: 'login' })}
           />
         )}
 
         {route.name === 'create' && (
           <CreateAccount
-            lastSwipe={lastSwipe}
-            meter={swipe.meter}
+            lastPass={lastPass}
+            state={state}
             ready={connected && reader.open}
             onReader={onReader}
             onCancel={() => go({ name: 'landing' })}
@@ -169,8 +164,8 @@ export default function App() {
         {route.name === 'login' && (
           <Login
             accounts={accounts}
-            lastSwipe={lastSwipe}
-            meter={swipe.meter}
+            lastPass={lastPass}
+            state={state}
             ready={connected && reader.open}
             onReader={onReader}
             onCancel={() => go({ name: 'landing' })}
@@ -210,8 +205,8 @@ export default function App() {
               ))}
           </ol>
           <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn" onClick={() => send(command.gate(!reader.open))}>
-              Toggle gate
+            <button className="btn" onClick={reset}>
+              Re-baseline
             </button>
             <button className="btn" onClick={() => send(command.gain(1))}>
               Gain 4x
@@ -219,16 +214,24 @@ export default function App() {
             <button className="btn" onClick={() => send(command.gain(2))}>
               Gain 16x
             </button>
+            <button className="btn" onClick={() => send(command.gain(3))}>
+              Gain 60x
+            </button>
             <button className="btn" onClick={hardware.clearLogs}>
               Clear log
             </button>
           </div>
-          {lastSwipe && (
+          {lastPass && (
             <p className="subtle" style={{ marginTop: 10 }}>
-              Last swipe: {lastSwipe.samples} samples over {lastSwipe.durationMs} ms
-              {lastSwipe.signature ? '' : ' — too short to use'}
+              Last swipe: {lastPass.pass.samples} samples over{' '}
+              {Math.round(lastPass.pass.durationMs)} ms —{' '}
+              {lastPass.pass.colours.join(' → ') || 'nothing named'}
             </p>
           )}
+          <p className="subtle" style={{ marginTop: 6 }}>
+            Empty sensor: r {Math.round(state.white.r)} · g {Math.round(state.white.g)} ·
+            b {Math.round(state.white.b)} · c {Math.round(state.white.c)}
+          </p>
         </details>
       </main>
     </div>

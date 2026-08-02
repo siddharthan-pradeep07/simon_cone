@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Traffic cone: safety orange against white, with the reflective band as a
  * recurring motif. Structure and spacing follow the Luma/shadcn convention --
  * soft neutral surfaces, one saturated accent used sparingly, generous
@@ -352,106 +352,6 @@ code {
   pointer-events: none;
 }
 
-/* --- swipe stage --- */
-
-.stage {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, var(--cone-50), var(--surface));
-  padding: 32px 24px;
-  text-align: center;
-  transition: border-color 140ms, background 140ms;
-}
-
-.stage--live {
-  border-style: solid;
-  border-color: var(--cone-500);
-  background: linear-gradient(180deg, var(--cone-100), var(--surface));
-}
-
-.stage__slot {
-  position: relative;
-  height: 64px;
-  margin: 0 auto 18px;
-  max-width: 260px;
-  border-radius: 10px;
-  background: #1c1917;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.stage__beam {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(249, 115, 22, 0.55),
-    transparent
-  );
-  transform: translateX(-100%);
-  animation: sweep 1.9s ease-in-out infinite;
-}
-
-@keyframes sweep {
-  60%,
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-.stage__slot span {
-  position: relative;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  color: #a8a29e;
-  text-transform: uppercase;
-}
-
-.stage h2 {
-  margin-bottom: 4px;
-}
-
-/* --- level meter --- */
-
-.meter {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--cone-100);
-  overflow: hidden;
-  margin-top: 16px;
-}
-
-.meter__fill {
-  height: 100%;
-  background: var(--cone-500);
-  transition: width 90ms linear;
-}
-
-/* --- enrolment progress --- */
-
-.dots {
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 20px 0 4px;
-}
-
-.dot {
-  width: 26px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  transition: background 160ms;
-}
-
-.dot--done {
-  background: var(--cone-500);
-}
 
 /* --- account --- */
 
@@ -603,16 +503,206 @@ details.debug summary:hover {
   color: var(--fg-muted);
 }
 
-.swatches {
-  display: flex;
-  height: 30px;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  margin-top: 14px;
+/* --- reader stage --- */
+
+.stage {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--cone-50), var(--surface));
+  padding: 30px 24px 22px;
+  text-align: center;
+  transition: border-color 140ms, background 140ms;
 }
 
-.swatches i {
-  flex: 1;
-  display: block;
+.stage--reading {
+  border-style: solid;
+  border-color: var(--cone-500);
+  background: linear-gradient(180deg, var(--cone-100), var(--surface));
 }
+
+/* Streaming expected but nothing arriving: the stage must not look alive. */
+.stage--silent {
+  border-style: solid;
+  border-color: #fecaca;
+  background: var(--danger-bg);
+}
+
+.stage--silent h2 {
+  color: #991b1b;
+}
+
+.stage__chip {
+  width: 74px;
+  height: 74px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: #1c1917;
+  border: 1px solid var(--border-strong);
+  transition: background 80ms linear, box-shadow 140ms;
+}
+
+.stage__chip--on {
+  box-shadow: 0 0 0 5px var(--cone-100);
+}
+
+.stage h2 {
+  margin-bottom: 4px;
+}
+
+/* --- novelty meter --- */
+
+.meter {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--cone-100);
+  margin-top: 16px;
+}
+
+.meter__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--cone-500);
+  transition: width 90ms linear;
+}
+
+/* Where novelty has to reach to start a swipe. */
+.meter__trigger {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 62.5%;
+  width: 2px;
+  background: var(--cone-700);
+  border-radius: 1px;
+}
+
+/* Colours accumulating in the swipe currently under way. */
+.building {
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 12px;
+}
+
+.building i {
+  width: 22px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+}
+
+.live__hint {
+  margin-top: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- enrolment progress --- */
+
+.dots {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.dot {
+  width: 30px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  transition: background 160ms;
+}
+
+.dot--done {
+  background: var(--cone-500);
+}
+
+/* --- one swipe's colours --- */
+
+.seq {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.seq__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 58px;
+}
+
+.seq__chip {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+}
+
+.seq__name {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* --- the dataset, one row per swipe --- */
+
+.dataset {
+  margin-top: 14px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.dataset__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dataset__index {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.dataset__strip {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.dataset__strip i {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+}
+
+.dataset__names {
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+

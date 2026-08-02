@@ -1,78 +1,83 @@
 import { useEffect, useRef, useState } from 'react';
-import { confidenceFrom, findMatch, swatches } from '../cards/signature';
+import { confidenceFrom, findMatch } from '../cards/match';
+import type { CapturedPass, ReaderState } from '../cards/pass';
 import type { Account } from '../cards/store';
-import type { CapturedSwipe, SwipeMeter } from '../cards/useSwipe';
-import { Notice, SwipeStage } from '../components/ui';
+import { ColourList, Notice, ReaderStage } from '../components/ui';
 
 const REASONS: Record<string, string> = {
   'no-accounts': 'No cards are enrolled on this device yet.',
-  'too-far': 'That card is not one the reader knows.',
+  'too-far': 'That card is not one the reader knows. Swipe again to retry.',
   ambiguous:
-    'Two enrolled cards look too alike to tell apart. Re-enrol one of them with a more distinctive card.',
+    'Two enrolled cards look too alike to tell apart. Swipe again, or re-enrol one of them with a more distinctive card.',
 };
 
 export function Login({
   accounts,
-  lastSwipe,
-  meter,
+  lastPass,
+  state,
   ready,
   onReader,
   onMatch,
   onCancel,
 }: {
   accounts: Account[];
-  lastSwipe: CapturedSwipe | null;
-  meter: SwipeMeter;
+  lastPass: { pass: CapturedPass; seq: number } | null;
+  state: ReaderState;
   ready: boolean;
   onReader: (open: boolean, oled: string) => void;
   onMatch: (account: Account) => void;
   onCancel: () => void;
 }) {
-  const [failure, setFailure] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string[] | null>(null);
+  const [attempt, setAttempt] = useState<{
+    message: string;
+    colours: string[];
+    confidence: number;
+  } | null>(null);
+  const [tries, setTries] = useState(0);
   const consumed = useRef(0);
 
   useEffect(() => {
-    onReader(true, 'Swipe|Card');
+    onReader(true, 'SWIPE|TO SIGN IN');
   }, [onReader]);
 
   useEffect(() => {
-    if (!lastSwipe || lastSwipe.seq <= consumed.current) return;
-    consumed.current = lastSwipe.seq;
+    if (!lastPass || lastPass.seq <= consumed.current) return;
+    consumed.current = lastPass.seq;
 
-    if (!lastSwipe.signature) {
-      setFailure('That went past too fast to read. Try a slower, steadier pass.');
+    const { pass } = lastPass;
+    if (pass.problem) {
+      setAttempt({ message: pass.problem, colours: pass.colours, confidence: 0 });
       return;
     }
 
-    setPreview(swatches(lastSwipe.signature));
-    const outcome = findMatch(lastSwipe.signature, accounts);
-
+    const outcome = findMatch(pass.colours, accounts);
     if (outcome.best) {
       onMatch(outcome.best);
       return;
     }
-    setFailure(REASONS[outcome.reason] ?? 'No match.');
-  }, [lastSwipe, accounts, onMatch]);
 
-  const confidence = lastSwipe?.signature
-    ? confidenceFrom(findMatch(lastSwipe.signature, accounts).score)
-    : 0;
+    setTries((count) => count + 1);
+    setAttempt({
+      message: REASONS[outcome.reason] ?? 'No match.',
+      colours: pass.colours,
+      confidence: confidenceFrom(outcome.score),
+    });
+  }, [lastPass, accounts, onMatch]);
 
   return (
     <div className="stack">
       <div>
         <h1>Swipe to sign in</h1>
         <p className="muted" style={{ marginTop: 8 }}>
-          The gate is open. Pass your card through the slot.
+          One swipe. If the reader cannot tell which account it is, just swipe
+          again.
         </p>
       </div>
 
-      <SwipeStage
+      <ReaderStage
         live={ready}
-        present={meter.present}
-        level={Math.min(1, meter.level / 700)}
-        title={meter.present ? 'Reading…' : 'Waiting for a card'}
+        state={state}
+        title={state.present ? 'Reading…' : 'Waiting for a card'}
         detail={
           ready
             ? 'Same direction you enrolled with works best, but either way is fine.'
@@ -80,23 +85,22 @@ export function Login({
         }
       />
 
-      {preview && (
+      {attempt && (
         <div>
-          <h3>Last read</h3>
-          <div className="swatches">
-            {preview.map((colour, index) => (
-              <i key={index} style={{ background: colour }} />
-            ))}
-          </div>
-          {accounts.length > 0 && (
-            <p className="subtle" style={{ marginTop: 8 }}>
-              Closest match confidence: {Math.round(confidence * 100)}%
+          <Notice tone="error">{attempt.message}</Notice>
+          <h3 style={{ marginTop: 16 }}>What the reader saw</h3>
+          <ColourList
+            names={attempt.colours}
+            empty="Nothing held steady long enough to name."
+          />
+          {accounts.length > 0 && attempt.colours.length > 0 && (
+            <p className="subtle" style={{ marginTop: 10 }}>
+              Closest match confidence: {Math.round(attempt.confidence * 100)}%
+              {tries > 2 && ' · if this keeps failing, the card may need re-enrolling'}
             </p>
           )}
         </div>
       )}
-
-      {failure && <Notice tone="error">{failure}</Notice>}
 
       <div className="row row--end">
         <button className="btn btn--ghost" onClick={onCancel}>

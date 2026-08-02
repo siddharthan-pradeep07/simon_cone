@@ -3,11 +3,11 @@ import { Cone } from '../components/ui';
 export function Landing({
   accounts,
   onCreate,
-  onSwipe,
+  onSignIn,
 }: {
   accounts: number;
   onCreate: () => void;
-  onSwipe: () => void;
+  onSignIn: () => void;
 }) {
   return (
     <div className="stack stack--lg">
@@ -15,8 +15,8 @@ export function Landing({
         <Cone className="hero__cone" />
         <h1>Simon Cone</h1>
         <p>
-          Card access by colour. The reader looks at your card and remembers what
-          it saw.
+          Card access by colour. The reader learns the colours along your card,
+          then recognises it from a single swipe.
         </p>
       </div>
 
@@ -24,7 +24,7 @@ export function Landing({
         <button className="btn btn--primary btn--lg" onClick={onCreate}>
           Create account
         </button>
-        <button className="btn btn--lg" onClick={onSwipe}>
+        <button className="btn btn--lg" onClick={onSignIn}>
           Swipe to sign in
         </button>
       </div>

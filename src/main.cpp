@@ -3,36 +3,40 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_TCS34725.h>
-#include <Servo.h>
 
 // ---------------------------------------------------------------------------
 // simon_cone firmware -- optical card reader.
 //
-// The board is dumb I/O. It opens a servo gate over the colour sensor, streams
-// raw sensor samples while a card passes underneath, and draws whatever text
-// the web app sends it. All the interesting work -- deciding where a swipe
-// starts and ends, turning it into a signature, matching it against enrolled
-// cards -- happens in the browser, where it can be changed without a reflash.
+// The board is dumb I/O. It streams raw sensor samples and draws whatever text
+// the web app sends it. All the interesting work -- deciding where a card's
+// pass over the sensor starts and ends, turning it into a signature, matching
+// it against enrolled cards -- happens in the browser, where it can be changed
+// without a reflash.
+//
+// The servo gate is gone for now: nothing needs to move for the sensor to see
+// a card pass over it, and an attached servo holding position only adds jitter
+// and current draw. It is a dozen lines in the history if it comes back.
 //
 // Protocol: newline-delimited text, 115200 baud.
 //
 //   in    PING                    -> PONG
 //         OLED <text>             -> OK OLED   ('|' is a line break)
 //         CLEAR                   -> OK CLEAR
-//         GATE <0|1>              -> OK GATE   (servo shutter over the sensor)
-//         SWIPE <0|1>             -> OK SWIPE  (start/stop the sample stream)
+//         SCAN <0|1>              -> OK SCAN   (start/stop the sample stream)
 //         LED <0|1>               -> OK LED    (sensor illuminator)
 //         GAIN <0-3>              -> OK GAIN   (1x, 4x, 16x, 60x)
-//         SERVO <1-3> <deg>       -> OK SERVO  (direct, for setting gate angles)
 //
 //   out   READY <version>
-//         CFG <gate> <swipe> <led> <gain>
+//         CFG <scan> <led> <gain>
 //         FREERAM <bytes>
-//         S <ms> <r> <g> <b> <c>  (~125 Hz while swiping)
+//         S <ms> <r> <g> <b> <c>  (~125 Hz while scanning)
 //         ERR <reason>
 // ---------------------------------------------------------------------------
 
-#define FW_VERSION "4"
+// Bumped for the SWIPE -> SCAN rename: an older board silently answers
+// "ERR unknown command SCAN" and never streams, which is worth being able to
+// spot in the log rather than debugging as a dead sensor.
+#define FW_VERSION "5"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -47,21 +51,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_2_4MS,
                                           TCS34725_GAIN_16X);
 
-Servo gateServo;
-const uint8_t GATE_PIN = 9;
-// Tune with SERVO 1 <deg>, then set these to whatever the mechanism wants.
-const uint8_t GATE_CLOSED_DEG = 100;
-const uint8_t GATE_OPEN_DEG   = 15;
-
-// 8 ms gives ~125 samples a second: about 60 across a normal swipe, comfortably
+// 8 ms gives ~125 samples a second: about 60 across a normal pass, comfortably
 // more than the signature needs, and only a third of the serial link's budget.
 // Polling faster would overrun the 32-byte TX buffer and start blocking loop().
-const unsigned long SWIPE_STREAM_MS = 8;
+const unsigned long SCAN_STREAM_MS = 8;
 
 bool tcsOk = false;
 bool displayOk = false;
-bool swiping = false;
-bool gateOpen = false;
+bool scanning = false;
 bool ledOn = true;
 uint8_t gainIndex = 2;  // 0=1x 1=4x 2=16x 3=60x
 
@@ -117,9 +114,9 @@ void setLed(bool on) {
 // Raw counts, uncorrected. The browser wants what the photodiodes measured --
 // it works in chromaticity, which divides out brightness anyway, and any
 // correction applied here would just be one more thing to reverse.
-void pumpSwipe(unsigned long now) {
-  if (!swiping || !tcsOk) return;
-  if (now - lastSample < SWIPE_STREAM_MS) return;
+void pumpScan(unsigned long now) {
+  if (!scanning || !tcsOk) return;
+  if (now - lastSample < SCAN_STREAM_MS) return;
   lastSample = now;
 
   uint16_t c, r, g, b;
@@ -178,15 +175,9 @@ void renderOled() {
 
 void reportConfig() {
   Serial.print(F("CFG "));
-  Serial.print(gateOpen ? 1 : 0); Serial.print(' ');
-  Serial.print(swiping ? 1 : 0);  Serial.print(' ');
+  Serial.print(scanning ? 1 : 0); Serial.print(' ');
   Serial.print(ledOn ? 1 : 0);    Serial.print(' ');
   Serial.println(gainIndex);
-}
-
-void setGate(bool open) {
-  gateOpen = open;
-  gateServo.write(open ? GATE_OPEN_DEG : GATE_CLOSED_DEG);
 }
 
 // --- commands --------------------------------------------------------------
@@ -218,20 +209,13 @@ void handleCommand(char* line) {
     return;
   }
 
-  if (strcmp(line, "GATE") == 0) {
-    setGate(arg && atoi(arg));
-    Serial.println(F("OK GATE"));
-    reportConfig();
-    return;
-  }
-
-  if (strcmp(line, "SWIPE") == 0) {
+  if (strcmp(line, "SCAN") == 0) {
     if (!tcsOk) {
       Serial.println(F("ERR no colour sensor"));
       return;
     }
-    swiping = arg && atoi(arg);
-    Serial.println(F("OK SWIPE"));
+    scanning = arg && atoi(arg);
+    Serial.println(F("OK SCAN"));
     reportConfig();
     return;
   }
@@ -254,17 +238,6 @@ void handleCommand(char* line) {
     }
     Serial.println(F("OK GAIN"));
     reportConfig();
-    return;
-  }
-
-  if (strcmp(line, "SERVO") == 0) {
-    char* second = arg ? strchr(arg, ' ') : nullptr;
-    if (!second) {
-      Serial.println(F("ERR SERVO needs index and angle"));
-      return;
-    }
-    if (atoi(arg) == 1) gateServo.write(constrain(atoi(second + 1), 0, 180));
-    Serial.println(F("OK SERVO"));
     return;
   }
 
@@ -310,9 +283,6 @@ void setup() {
   // A full-screen redraw drops from ~100 ms to ~25 ms at 400 kHz.
   Wire.setClock(400000);
 
-  gateServo.attach(GATE_PIN);
-  setGate(false);
-
   strncpy(oledText, "SIMON|CONE", sizeof(oledText) - 1);
   renderOled();
   oledDirty = false;
@@ -331,12 +301,15 @@ void loop() {
 
   pumpSerial();
 
-  // Redrawing takes ~25 ms of blocking I2C, so never do it mid-swipe -- it
-  // would punch a hole in the sample stream exactly where the card is.
-  if (oledDirty && !swiping) {
+  // Redrawing takes ~25 ms of blocking I2C, which punches a hole in the sample
+  // stream. That is only harmful while a card is actually crossing, and only
+  // the browser knows when that is -- it holds updates back until the slot is
+  // empty. Refusing them here as well would mean the display could never show
+  // anything live, since the stream runs the whole time a reading page is open.
+  if (oledDirty) {
     renderOled();
     oledDirty = false;
   }
 
-  pumpSwipe(now);
+  pumpScan(now);
 }

@@ -1,30 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildTemplate, swatches } from '../cards/signature';
+import { spread } from '../cards/match';
+import type { CapturedPass, ReaderState } from '../cards/pass';
 import { newId, saveAccount, type Account } from '../cards/store';
-import { Field, Notice, SwipeStage } from '../components/ui';
-import type { CapturedSwipe, SwipeMeter } from '../cards/useSwipe';
+import { ColourList, Dataset, Field, Notice, ReaderStage } from '../components/ui';
 
 /**
- * Ten swipes. Each one is a sample of how this card reads, and the template is
- * their average — so the count is doing two jobs. It smooths out the variation
- * between swipes, and the amount they disagree by *is* the tolerance the
- * matcher later uses for this card. One swipe would give an average with no
- * measure of its own reliability.
+ * Swipes that make up the dataset.
+ *
+ * Each one is an example of how this card reads, and they differ: a band near a
+ * hue boundary flips its name, a fast pass loses a thin stripe. Storing several
+ * covers that variation by having contained it, which is what lets sign-in be a
+ * single swipe held to a tight standard rather than one loose guess.
  */
-const REQUIRED = 10;
+const REQUIRED = 5;
 
 type Step = 'details' | 'enrol';
 
 export function CreateAccount({
-  lastSwipe,
-  meter,
+  lastPass,
+  state,
   ready,
   onReader,
   onDone,
   onCancel,
 }: {
-  lastSwipe: CapturedSwipe | null;
-  meter: SwipeMeter;
+  lastPass: { pass: CapturedPass; seq: number } | null;
+  state: ReaderState;
   ready: boolean;
   onReader: (open: boolean, oled: string) => void;
   onDone: (account: Account) => void;
@@ -33,7 +34,7 @@ export function CreateAccount({
   const [step, setStep] = useState<Step>('details');
   const [name, setName] = useState('');
   const [balance, setBalance] = useState('1000.00');
-  const [swipes, setSwipes] = useState<number[][]>([]);
+  const [recordings, setRecordings] = useState<string[][]>([]);
   const [warning, setWarning] = useState<string | null>(null);
 
   // Swipes are numbered so a capture is consumed exactly once. Without this the
@@ -42,40 +43,36 @@ export function CreateAccount({
 
   useEffect(() => {
     if (step === 'details') {
-      onReader(false, 'Account|Creation');
+      onReader(false, 'ACCOUNT|CREATION');
     } else {
-      onReader(true, `Swipe|${swipes.length} / ${REQUIRED}`);
+      onReader(true, `${recordings.length}/${REQUIRED}|SWIPE`);
     }
-  }, [step, swipes.length, onReader]);
+  }, [step, recordings.length, onReader]);
 
   useEffect(() => {
-    if (step !== 'enrol' || !lastSwipe) return;
-    if (lastSwipe.seq <= consumed.current) return;
-    consumed.current = lastSwipe.seq;
+    if (step !== 'enrol' || !lastPass) return;
+    if (lastPass.seq <= consumed.current) return;
+    consumed.current = lastPass.seq;
 
-    if (!lastSwipe.signature) {
-      setWarning('That went past too fast to read. Try a slower, steadier pass.');
+    if (lastPass.pass.problem) {
+      setWarning(lastPass.pass.problem);
       return;
     }
     setWarning(null);
-    setSwipes((previous) =>
-      previous.length >= REQUIRED ? previous : [...previous, lastSwipe.signature!],
+    setRecordings((previous) =>
+      previous.length >= REQUIRED ? previous : [...previous, lastPass.pass.colours],
     );
-  }, [lastSwipe, step]);
+  }, [lastPass, step]);
 
-  // How much the swipes so far agree with each other. Shown live because a
+  // How much the swipes so far disagree with each other. Shown live because a
   // card that reads inconsistently is worth knowing about now, while it can
   // still be fixed by swiping more carefully, rather than at sign-in.
   const agreement = useMemo(() => {
-    if (swipes.length < 3) return null;
-    // Spread is the mean distance from the average swipe. 0.06 is roughly where
-    // a card stops being reliably separable from a different one.
-    return Math.max(0, Math.min(1, 1 - buildTemplate(swipes).spread / 0.06));
-  }, [swipes]);
+    if (recordings.length < 3) return null;
+    return Math.max(0, Math.min(1, 1 - spread(recordings) / 0.4));
+  }, [recordings]);
 
-  const preview = swipes.length > 0 ? swatches(buildTemplate(swipes).mean) : null;
-
-  const complete = swipes.length >= REQUIRED;
+  const complete = recordings.length >= REQUIRED;
   const amount = Number(balance);
   const detailsValid = name.trim().length > 0 && Number.isFinite(amount) && amount >= 0;
 
@@ -84,8 +81,7 @@ export function CreateAccount({
       id: newId(),
       name: name.trim(),
       balance: amount,
-      template: buildTemplate(swipes),
-      swipes: swipes.length,
+      recordings,
       createdAt: Date.now(),
     };
     saveAccount(account);
@@ -144,66 +140,67 @@ export function CreateAccount({
     );
   }
 
+  const latest = recordings[recordings.length - 1];
+
   return (
     <div className="stack">
       <div>
         <h1>Teach your card</h1>
         <p className="muted" style={{ marginTop: 8 }}>
-          The gate is open. Pass any card through the slot {REQUIRED} times, the
-          same way each time.
+          Move your card or picture across the sensor {REQUIRED} times, the same
+          way each time. Each swipe records the colours along it, and together
+          they become the dataset that recognises it.
         </p>
       </div>
 
-      <SwipeStage
+      <ReaderStage
         live={ready}
-        present={meter.present}
-        level={Math.min(1, meter.level / 700)}
-        title={complete ? 'All done' : `${swipes.length} of ${REQUIRED}`}
+        state={state}
+        title={complete ? 'All done' : `${recordings.length} of ${REQUIRED}`}
         detail={
           complete
             ? 'The reader has enough to work with.'
             : ready
-              ? 'Slide the card through, front face down.'
+              ? 'Move it across the sensor, printed side down.'
               : 'Waiting for the board…'
         }
       />
 
       <div className="dots">
         {Array.from({ length: REQUIRED }, (_, index) => (
-          <span key={index} className={`dot${index < swipes.length ? ' dot--done' : ''}`} />
+          <span
+            key={index}
+            className={`dot${index < recordings.length ? ' dot--done' : ''}`}
+          />
         ))}
       </div>
 
-      {preview && (
+      {latest && (
         <div>
-          <h3>What the reader sees</h3>
-          <div className="swatches">
-            {preview.map((colour, index) => (
-              <i key={index} style={{ background: colour }} />
-            ))}
-          </div>
+          <h3>Last swipe</h3>
+          <ColourList names={latest} />
+        </div>
+      )}
+
+      {recordings.length > 1 && (
+        <div>
+          <h3>Dataset so far</h3>
+          <Dataset recordings={recordings} />
         </div>
       )}
 
       {warning && <Notice tone="error">{warning}</Notice>}
 
-      {agreement !== null && agreement < 0.35 && !complete && (
+      {agreement !== null && agreement < 0.4 && !complete && (
         <Notice>
           These swipes are not agreeing with each other much. Keep the speed and
           direction consistent — the reader is learning the colours along the
-          card, so it matters which way round it goes.
-        </Notice>
-      )}
-
-      {meter.clipped && (
-        <Notice>
-          The sensor is saturating on that card. It will still work, but a
-          slightly higher pass, or lower gain in the debug panel, reads better.
+          card, so it matters which way round it goes and how fast.
         </Notice>
       )}
 
       <div className="row row--end">
-        <button className="btn btn--ghost" onClick={() => setSwipes([])}>
+        <button className="btn btn--ghost" onClick={() => setRecordings([])}>
           Start over
         </button>
         <button className="btn btn--primary" disabled={!complete} onClick={finish}>

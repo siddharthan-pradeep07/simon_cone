@@ -23,16 +23,15 @@ export interface Sample {
 export const FULL_SCALE = 1024;
 
 export interface Config {
-  gate: boolean;
-  swipe: boolean;
+  /** The board is streaming samples. */
+  scanning: boolean;
   led: boolean;
   /** 0=1x, 1=4x, 2=16x, 3=60x. */
   gain: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
-  gate: false,
-  swipe: false,
+  scanning: false,
   led: true,
   gain: 2,
 };
@@ -65,10 +64,9 @@ export function parseLine(line: string): HardwareEvent {
       return {
         type: 'config',
         config: {
-          gate: rest[0] === '1',
-          swipe: rest[1] === '1',
-          led: rest[2] === '1',
-          gain: Number(rest[3]),
+          scanning: rest[0] === '1',
+          led: rest[1] === '1',
+          gain: Number(rest[2]),
         },
       };
     // Single letter on purpose: this arrives ~125 times a second and the verb
@@ -86,9 +84,7 @@ export const command = {
   ping: () => 'PING',
   oled: (text: string) => `OLED ${text}`,
   clear: () => 'CLEAR',
-  gate: (open: boolean) => `GATE ${open ? 1 : 0}`,
-  swipe: (on: boolean) => `SWIPE ${on ? 1 : 0}`,
+  scan: (on: boolean) => `SCAN ${on ? 1 : 0}`,
   led: (on: boolean) => `LED ${on ? 1 : 0}`,
   gain: (index: number) => `GAIN ${Math.round(index)}`,
-  servo: (index: number, angle: number) => `SERVO ${index} ${Math.round(angle)}`,
 };

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { money, type Account as AccountRecord } from '../cards/store';
-import { swatches } from '../cards/signature';
-import { Kv } from '../components/ui';
+import { spread } from '../cards/match';
+import { Dataset, Kv } from '../components/ui';
 
 export function Account({
   account,
@@ -15,13 +15,11 @@ export function Account({
   onDelete: (id: string) => void;
 }) {
   useEffect(() => {
-    // Gate closed: nothing to read here, and leaving a servo holding an open
-    // position just draws current and buzzes.
+    // Nothing to read on this page, so the sample stream is stopped: it keeps
+    // the board log legible and stops the reader talking for no reason.
     const short = account.name.split(' ')[0].slice(0, 10);
     onReader(false, `${short}|$${Math.round(account.balance)}`);
   }, [account, onReader]);
-
-  const card = swatches(account.template.mean);
 
   return (
     <div className="stack">
@@ -33,22 +31,22 @@ export function Account({
 
       <div className="card">
         <h3>Card on file</h3>
-        <div className="swatches">
-          {card.map((colour, index) => (
-            <i key={index} style={{ background: colour }} />
-          ))}
-        </div>
+        <Dataset recordings={account.recordings} />
         <div style={{ marginTop: 16 }}>
-          <Kv label="Enrolment swipes" value={account.swipes} />
+          <Kv label="Enrolment swipes" value={account.recordings.length} />
           <Kv
             label="Card consistency"
-            value={`±${account.template.spread.toFixed(4)}`}
+            value={`±${spread(account.recordings).toFixed(2)}`}
           />
           <Kv
             label="Enrolled"
             value={new Date(account.createdAt).toLocaleDateString()}
           />
         </div>
+        <p className="subtle" style={{ marginTop: 12 }}>
+          This reads what anyone can see by looking at the card. It identifies an
+          account; it does not secure one.
+        </p>
       </div>
 
       <div className="row row--end">
